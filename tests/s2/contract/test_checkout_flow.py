@@ -15,7 +15,7 @@ from business_app import store
 from platform_app import checkout_view
 from ucp_core import composed
 
-from tests.s2.conftest import PROFILE_URL, Pair, create_body, make_pair
+from tests.s2.conftest import PROFILE_URL, Pair, create_body, make_pair, without_key_ids
 
 
 def rows(p: pathlib.Path) -> list[dict[str, Any]]:
@@ -55,7 +55,10 @@ def test_ac07_headers_and_timeline(pair: Pair) -> None:
 def test_ac100_no_token_or_header_value_in_rows(pair: Pair) -> None:
     r = pair.client.create(create_body())
     pair.timeline.record(r)
-    text = (pair.tmp / "business.jsonl").read_text() + (pair.tmp / "platform.jsonl").read_text()
+    # The `kid` in "verified keyid=<kid>" is random. "eyJ" can be in it by chance: remove it first.
+    text = without_key_ids(
+        (pair.tmp / "business.jsonl").read_text() + (pair.tmp / "platform.jsonl").read_text()
+    )
     assert str(r.idempotency_key) not in text
     for word in ("sig1=", "Signature", "token", "eyJ", PROFILE_URL):
         assert word not in text

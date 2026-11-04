@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import re
 import subprocess
 import time
 import uuid
@@ -252,6 +253,93 @@ FORBIDDEN = (
 )
 
 
+# Other words that no span name, attribute key or attribute value may have (AC-54).
+FORBIDDEN_WORDS = ("street", "address", "tok_", "api_key", "apikey")
+# The test card numbers of the repository, as digits only: `tests/s3/unit/test_pay_units.py`,
+# `tests/s7/contract/test_platform_catalog_api.py` and `business/src/ucp_sample_server/integration_test.py`
+# use 4111111111111111. `contracts/ucp-schemas/shopping/types/card_credential.json` has 4242424242424242.
+TEST_PANS = ("4111111111111111", "4242424242424242")
+SHORT_PAN = "4111"
+# Random IDs: UUIDs (for example the checkout ID in `http.url`) and long hex runs (trace IDs, span IDs
+# and hashes, for example in the `@jaeger@warnings` attribute). They can contain "4111" by chance.
+_RANDOM_ID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}", re.IGNORECASE
+)
+# What the AC-54 scan reads. It never reads `traceId`, `spanId`, `parentSpanId`, `traceState`, `flags`,
+# `kind`, a time field (`startTimeUnixNano`, `endTimeUnixNano`, `timeUnixNano`) or the `traceId` and
+# `spanId` of a link. Those fields hold random or time values and no text of the application.
+SCANNED_FIELDS = (
+    "name",
+    "service",
+    "attributes[].key",
+    "attributes[].value",
+    "status.message",
+    "events[].name",
+    "events[].attributes[].key",
+    "events[].attributes[].value",
+    "links[].attributes[].key",
+    "links[].attributes[].value",
+)
+
+
+def _any_value_texts(value: Any) -> Iterator[str]:
+    """The text of an OTLP/JSON `AnyValue`: scalars, arrays and key-value lists, at all depths."""
+    if not isinstance(value, dict):
+        return
+    for kind, inner in value.items():
+        if kind == "arrayValue":
+            for item in inner.get("values", []):
+                yield from _any_value_texts(item)
+        elif kind == "kvlistValue":
+            for item in inner.get("values", []):
+                yield str(item["key"])
+                yield from _any_value_texts(item.get("value", {}))
+        else:  # stringValue, intValue, doubleValue, boolValue, bytesValue
+            yield str(inner)
+
+
+def _attribute_texts(attributes: list[dict[str, Any]]) -> Iterator[str]:
+    for a in attributes:
+        yield str(a["key"])
+        yield from _any_value_texts(a.get("value", {}))
+
+
+def span_texts(span: dict[str, Any]) -> list[str]:
+    """All text of one span that AC-54 scans (see `SCANNED_FIELDS`). No ID and no time field."""
+    out: list[str] = [str(span.get("name", "")), str(span.get("service", ""))]
+    out.extend(_attribute_texts(span.get("attributes", [])))
+    out.append(str((span.get("status") or {}).get("message", "")))
+    for event in span.get("events", []):
+        out.append(str(event.get("name", "")))
+        out.extend(_attribute_texts(event.get("attributes", [])))
+    for link in span.get("links", []):
+        out.extend(_attribute_texts(link.get("attributes", [])))
+    return [t for t in out if t]
+
+
+def assert_spans_have_no_forbidden_text(spans: list[dict[str, Any]]) -> None:
+    """AC-54: no forbidden word, no test card number in the names, keys and values of the spans.
+
+    The word checks read the text as it is. The check for a full test card number reads the
+    digits of each text (spaces, hyphens and other separators removed), so "4111 1111 1111 1111"
+    fails too. The short check for "4111" reads the text with random IDs removed: a UUID or a
+    long hex run holds "4111" by chance and is not a card number. The full card number check
+    still reads those IDs.
+    """
+    texts = [t for s in spans for t in span_texts(s)]
+    text = "\n".join(texts).lower()
+    for bad in FORBIDDEN:
+        assert bad.lower() not in text, bad
+    for word in FORBIDDEN_WORDS:
+        assert word not in text, word
+    for t in texts:
+        digits = re.sub(r"\D", "", t)
+        for pan in TEST_PANS:
+            assert pan not in digits, "test card number as digits"
+    without_ids = "\n".join(_RANDOM_ID.sub("<id>", t) for t in texts)
+    assert SHORT_PAN not in without_ids, SHORT_PAN
+
+
 def test_ac54_spans_have_no_token_pan_address_email_key_or_signature(tpair: Pair) -> None:
     tracer = telemetry.provider("platform").get_tracer("tests.s4")  # type: ignore[union-attr]
     with tracer.start_as_current_span("smoke", kind=SpanKind.SERVER):
@@ -264,11 +352,9 @@ def test_ac54_spans_have_no_token_pan_address_email_key_or_signature(tpair: Pair
     telemetry.flush()
     spans = fetch_trace(tid, _has("business", "CLIENT", "psp-mock", "SERVER"))
     assert len(spans) >= 6, len(spans)
-    text = json.dumps(spans).lower()
-    for bad in FORBIDDEN:
-        assert bad.lower() not in text, bad
-    for word in ("street", "address", "4111", "tok_", "api_key", "apikey"):
-        assert word not in text, word
+    # Scan names, attribute keys and attribute values only. Not the IDs and not the times: they are
+    # random (a span ID can hold "4111" by chance). `SCANNED_FIELDS` lists what is read.
+    assert_spans_have_no_forbidden_text(spans)
     # The only attribute keys are the standard HTTP keys and the `ucp.*` keys of this demo.
     keys = {k for s in spans for k in _attrs(s)}
     assert not [k for k in keys if "header" in k or "body" in k], keys
@@ -279,7 +365,9 @@ def test_ac54_spans_have_no_token_pan_address_email_key_or_signature(tpair: Pair
                 "trace_id": tid,
                 "spans": len(spans),
                 "attribute_keys": sorted(keys),
-                "forbidden_terms_checked": list(FORBIDDEN),
+                "forbidden_terms_checked": [*FORBIDDEN, *FORBIDDEN_WORDS, SHORT_PAN],
+                "test_card_numbers_checked": len(TEST_PANS),
+                "scanned_fields": list(SCANNED_FIELDS),
                 "found": [],
                 "scanned_at": datetime.now(UTC).isoformat(),
             },

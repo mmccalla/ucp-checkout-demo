@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 from ucp_core.constants import ROOT
 
-from tests.s2.conftest import create_body
+from tests.s2.conftest import create_body, without_key_ids
 
 CA = ROOT / ".run/xdg-data/caddy/pki/authorities/local/root.crt"
 PLATFORM = "https://localhost:8443"
@@ -60,6 +60,7 @@ def test_live_create_signed_and_timeline() -> None:
     assert len(biz) == 1
     assert biz[0]["status"] == 201
     assert biz[0]["signature"].startswith("verified keyid=")
-    text = json.dumps(tl)
+    # The `kid` in "verified keyid=<kid>" is random. "eyJ" can be in it by chance: remove it first.
+    text = without_key_ids(json.dumps(tl))
     for word in ("sig1=", "eyJ", "BEGIN", "token"):
         assert word not in text

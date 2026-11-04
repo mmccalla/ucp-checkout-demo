@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import importlib
 import pathlib
+import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,6 +35,20 @@ ADDRESS = {
     "postal_code": "SW1A 1AA",
     "address_country": "GB",
 }
+
+
+_KEY_ID = r"keyid=([A-Za-z0-9_-]{43})(?![A-Za-z0-9_-])"
+
+
+def without_key_ids(text: str) -> str:
+    """Remove the `kid` of each `keyid=<kid>` in log rows before a scan for short forbidden words.
+
+    The `kid` is the RFC 7638 thumbprint of a key that each run makes new: 43 random base64url
+    characters. A short word such as "eyJ" is in a random `kid` by chance (about 1 in 6000). Each
+    `keyid=` must have a value of exactly this form, so no other text hides behind it.
+    """
+    assert re.search(r"keyid=(?![A-Za-z0-9_-]{43}(?![A-Za-z0-9_-]))", text) is None, "bad keyid"
+    return re.sub(_KEY_ID, "keyid=", text)
 
 
 def create_body(item: str = "demo_tshirt", qty: int = 1, country: str = "GB") -> dict[str, Any]:
