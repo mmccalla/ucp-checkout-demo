@@ -37,6 +37,7 @@ package = false
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers -ra"
+filterwarnings = ["error::starlette.exceptions.StarletteDeprecationWarning"]
 xfail_strict = true
 testpaths = ["tests"]
 pythonpath = ["platform/backend/src", "business/src", "libs", "psp-mock/src", "conformance", "tools/latency"]
