@@ -69,7 +69,7 @@ def bodies(s: Stack, op: str) -> list[Any]:
 
 def biz_product(s: Stack, product_id: str) -> dict[str, Any]:
     h = {"UCP-Agent": f'profile="{PROFILE_URL}"', "Request-Id": "rid-test"}
-    r: httpx2.Response = s.pair.biz.post("/catalog/product", json={"id": product_id}, headers=h)
+    r = s.pair.biz.post("/catalog/product", json={"id": product_id}, headers=h)
     body: dict[str, Any] = r.json()
     return body
 
