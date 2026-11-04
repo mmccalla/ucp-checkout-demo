@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+# Modified by the UCP demo in 2026 (Apache-2.0 section 4(b)). The changes are the
+# comments marked "UCP demo patch". See business/UPSTREAM.md.
 
 """Unit tests for the RFC 9421 signing module.
 
@@ -30,7 +32,7 @@ from absl.testing import absltest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import ed25519
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 import ucp_signing as signing
 
 
@@ -348,15 +350,15 @@ class ProfileFetchTest(absltest.TestCase):
     signing.clear_key_cache()
 
   def _fetch(self, handler) -> list:
-    """Run fetch_signing_keys against a mocked httpx transport."""
-    real_client = httpx.AsyncClient
+    """Run fetch_signing_keys against a mocked httpx2 transport."""
+    real_client = httpx2.AsyncClient
 
     def factory(*args, **kwargs):
-      kwargs["transport"] = httpx.MockTransport(handler)
+      kwargs["transport"] = httpx2.MockTransport(handler)
       kwargs.pop("follow_redirects", None)
       return real_client(*args, follow_redirects=False, **kwargs)
 
-    signing.httpx.AsyncClient = factory
+    signing.httpx2.AsyncClient = factory
     try:
       import asyncio
 
@@ -366,7 +368,7 @@ class ProfileFetchTest(absltest.TestCase):
         )
       )
     finally:
-      signing.httpx.AsyncClient = real_client
+      signing.httpx2.AsyncClient = real_client
 
   def test_reads_top_level_signing_keys(self) -> None:
     """signing_keys[] (this server's declared 2026-04-08 pin) is read.
@@ -376,7 +378,7 @@ class ProfileFetchTest(absltest.TestCase):
     is the realistic shape.
     """
     keys = self._fetch(
-      lambda req: httpx.Response(
+      lambda req: httpx2.Response(
         200,
         json={"ucp": {"version": "2026-04-08"}, "signing_keys": [{"kid": "a"}]},
       )
@@ -386,7 +388,7 @@ class ProfileFetchTest(absltest.TestCase):
   def test_reads_top_level_signing_keys_without_ucp_wrapper(self) -> None:
     """A top-level signing_keys[] array (no ucp wrapper) is read."""
     keys = self._fetch(
-      lambda req: httpx.Response(200, json={"signing_keys": [{"kid": "b"}]})
+      lambda req: httpx2.Response(200, json={"signing_keys": [{"kid": "b"}]})
     )
     self.assertEqual(keys[0]["kid"], "b")
 
@@ -398,7 +400,7 @@ class ProfileFetchTest(absltest.TestCase):
     """
     with self.assertRaises(signing.SignatureError) as ctx:
       self._fetch(
-        lambda req: httpx.Response(
+        lambda req: httpx2.Response(
           200, json={"ucp": {"signing_keys": [{"kid": "old"}]}}
         )
       )
@@ -411,7 +413,7 @@ class ProfileFetchTest(absltest.TestCase):
     """
     with self.assertRaises(signing.SignatureError) as ctx:
       self._fetch(
-        lambda req: httpx.Response(
+        lambda req: httpx2.Response(
           200, json={"ucp": {}, "keys": [{"kid": "future"}]}
         )
       )
@@ -421,20 +423,20 @@ class ProfileFetchTest(absltest.TestCase):
     """A 3xx response is treated as unreachable (no redirects allowed)."""
     with self.assertRaises(signing.SignatureError) as ctx:
       self._fetch(
-        lambda req: httpx.Response(302, headers={"location": "https://x/y"})
+        lambda req: httpx2.Response(302, headers={"location": "https://x/y"})
       )
     self.assertEqual(ctx.exception.code, "profile_unreachable")
 
   def test_non_json_is_malformed(self) -> None:
     """A non-JSON body yields profile_malformed."""
     with self.assertRaises(signing.SignatureError) as ctx:
-      self._fetch(lambda req: httpx.Response(200, text="not json"))
+      self._fetch(lambda req: httpx2.Response(200, text="not json"))
     self.assertEqual(ctx.exception.code, "profile_malformed")
 
   def test_keyless_is_malformed(self) -> None:
     """A profile with no keys yields profile_malformed."""
     with self.assertRaises(signing.SignatureError) as ctx:
-      self._fetch(lambda req: httpx.Response(200, json={"ucp": {}}))
+      self._fetch(lambda req: httpx2.Response(200, json={"ucp": {}}))
     self.assertEqual(ctx.exception.code, "profile_malformed")
 
 

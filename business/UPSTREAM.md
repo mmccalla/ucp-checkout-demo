@@ -34,6 +34,7 @@
 | P15 | `exceptions.py`, `config.py`, `services/checkout_service.py` | T-105: `PaymentFailedError` is code `payment_failed`, HTTP 200, `recoverable`. Complete checks the fulfillment and the stock before it charges. A payment failure stores the checkout body with one `payment_failed` message for the Idempotency-Key, with no order and no save. Only declared handlers can pay (AC-32). `PAYMENT_GATEWAY` credentials go to `PAYMENT_AUTHORIZER`. The completed response echoes the instruments without `credential` (AC-112). The request log masks each credential (AC-54). `WEBHOOK_TRANSPORT` is a test seam for webhook deliveries. | Spec v1.1.4 T-105 (section 15.4). checkout-rest.md lines 1275-1282, checkout.md lines 242 and 245-248, rest.openapi.json lines 301-317 at UCP `9c9d6fc`. Tests `tests/s4/unit/test_complete.py`. |
 | P16 | `config.py`, `webhook_signer.py`, `services/checkout_service.py` | S4 webhooks. `WEBHOOK_SIGNING_KEY`: the webhook signer uses the key that the profile publishes in `signing_keys` (AC-65). `WEBHOOK_PROFILE_URL`: `UCP-Agent` names the public profile URL, not the proxy upstream. The retry backoff adds jitter (T-42). `WEBHOOK_DEAD_LETTER` is called after the last failed attempt or a 4xx (T-42). `ship_order` adds a fake `tracking_number`, `tracking_url` and `carrier` (sample defect: `fulfillment_event.json` needs them when `type` is not `processing`). New `deliver_order` adds a `delivered` event and sends `order_delivered` (AC-74). | order.md lines 416-542 at UCP `9c9d6fc`. https://ucp.dev/2026-04-08/schemas/shopping/types/fulfillment_event.json. Spec T-42, AC-65, AC-74. Tests `tests/s4/g6/test_webhooks.py`. |
 | D6 | `services/checkout_service.py` | `google_pay` and `gpay*` handler ids call `config.PAYMENT_AUTHORIZER` | 02-design 17.2 defect 6. S4 sets the authorizer. In S2 it fails closed. |
+| P17 | `config.py`, `idempotency_race_test.py`, `integration_test.py`, `routes/ucp_implementation.py`, `services/checkout_service.py`, `ucp_signing.py`, `ucp_signing_test.py`, `pyproject.toml` | Each `httpx` name is `httpx2` (the same API). `pyproject.toml` lists `httpx2>=2.16.0`. The `respx` import and the `respx` line are not changed. | The demo has no `httpx` dependency. Spec `httpx2-spec-v3.md`. `httpx2` docs `docs/migration.md` at tag `v2.16.0`. |
 
 The host app does not mount the sample discovery and MCP routers (P11: they are not in the demo scope).
 
@@ -42,8 +43,13 @@ The host app does not mount the sample discovery and MCP routers (P11: they are 
 - `config.py`
 - `dependencies.py`
 - `exceptions.py`
+- `idempotency_race_test.py`
+- `integration_test.py`
 - `models.py`
+- `pyproject.toml`
 - `routes/ucp_implementation.py`
 - `server.py`
 - `services/checkout_service.py`
+- `ucp_signing.py`
+- `ucp_signing_test.py`
 - `webhook_signer.py`

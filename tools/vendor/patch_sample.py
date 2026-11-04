@@ -828,6 +828,29 @@ sub(
 # removed template (version 2026-04-08 URLs; 02-design 17.2 defects 1 to 5). The demo pins
 # handler 2026-01-23 (AC-118). The README is not code. business/UPSTREAM.md links the original.
 (S / "README.md").unlink()
+# ------------------------------------------------------------------ P17 (httpx2)
+# UCP demo patch P17: every httpx name becomes httpx2 (the pydantic fork, same API). The host
+# app and the tests use httpx2 only. Each `sub` matches an exact count. Usage first, then the import.
+for _rel, _dots, _comment in [
+    ("config.py", 1, None),
+    ("idempotency_race_test.py", 6, ("through httpx's ASGI", "through httpx2's ASGI")),
+    ("integration_test.py", 3, ("with httpx stubbed", "with httpx2 stubbed")),
+    ("routes/ucp_implementation.py", 2, None),
+    ("services/checkout_service.py", 2, None),
+    ("ucp_signing.py", 2, None),
+    ("ucp_signing_test.py", 11, ("a mocked httpx transport", "a mocked httpx2 transport")),
+]:
+    sub(_rel, "httpx.", "httpx2.", _dots)
+    if _comment:
+        sub(_rel, *_comment)
+    if _rel != "config.py":
+        sub(
+            _rel,
+            "\nimport httpx\n",
+            "\nimport httpx2  # UCP demo patch P17: httpx2 replaces httpx\n",
+        )
+sub("pyproject.toml", '"httpx>=0.26.0"', '"httpx2>=2.16.0"', 2)
+
 print("patches applied")
 
 

@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 import g8_stats
-import httpx
+import httpx2
 from ucp_core import tlsctx
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -58,11 +58,11 @@ def ready(start_ns: int, log: pathlib.Path, limit: float = READY_LIMIT_S) -> int
             try:
                 # The TLS endpoints use the local CA of this layout (T-90), as the Platform does.
                 verify = tlsctx.client_context() if url.startswith("https") else True
-                r = httpx.get(url, timeout=2.0, verify=verify)
+                r = httpx2.get(url, timeout=2.0, verify=verify)
                 if r.status_code == 200:
                     t_ok[name] = (time.monotonic_ns() - start_ns) / 1e9
                     lines.append(f"{t_ok[name]:8.2f} s  {name} ready  {url}")
-            except (httpx.HTTPError, OSError):
+            except (httpx2.HTTPError, OSError):
                 pass  # the service is not up yet, or the CA file is not written yet
         time.sleep(0.2)
     total = max(t_ok.values()) if len(t_ok) == len(urls) else None

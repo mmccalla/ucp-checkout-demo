@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+# Modified by the UCP demo in 2026 (Apache-2.0 section 4(b)). The changes are the
+# comments marked "UCP demo patch". See business/UPSTREAM.md.
 
 """Concurrent idempotency: one key raced against itself.
 
@@ -29,7 +31,7 @@ The two obligations under test, both from the idempotency contract:
                       idempotency_conflict, because reusing a key with new
                       parameters is a client error, not a server fault.
 
-Concurrency is driven through httpx's ASGI transport with asyncio.gather
+Concurrency is driven through httpx2's ASGI transport with asyncio.gather
 rather than TestClient, which serialises requests and so cannot produce the
 interleaving at all. That is why the existing integration tests pass while
 this one does not.
@@ -47,7 +49,7 @@ from absl import flags
 from absl.testing import absltest
 import db
 import dependencies
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 from server.server import app
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -183,15 +185,15 @@ class IdempotencyRaceTest(absltest.TestCase):
       "request-id": str(uuid.uuid4()),
     }
 
-  async def _race(self, bodies: list[dict]) -> list[httpx.Response]:
+  async def _race(self, bodies: list[dict]) -> list[httpx2.Response]:
     """One POST per body, all at once, under a single Idempotency-Key."""
     key = f"race-{uuid.uuid4()}"
     # raise_app_exceptions=False so an unhandled server exception becomes
     # the 500 a real client sees instead of being re-raised into the test.
     # These two tests are about the STATUS a racing caller is given, and a
     # propagated traceback would hide it behind an error of our own.
-    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(
+    transport = httpx2.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx2.AsyncClient(
       transport=transport, base_url="http://samples.test"
     ) as client:
       return await asyncio.gather(
@@ -203,10 +205,10 @@ class IdempotencyRaceTest(absltest.TestCase):
         )
       )
 
-  def _run_race(self, bodies: list[dict]) -> list[httpx.Response]:
+  def _run_race(self, bodies: list[dict]) -> list[httpx2.Response]:
     """Prepare, race and dispose inside ONE loop (see setUp for why)."""
 
-    async def scenario() -> list[httpx.Response]:
+    async def scenario() -> list[httpx2.Response]:
       await self._prepare()
       try:
         return await self._race(bodies)
@@ -216,7 +218,7 @@ class IdempotencyRaceTest(absltest.TestCase):
     return asyncio.run(scenario())
 
   @staticmethod
-  def _summary(responses: list[httpx.Response]) -> str:
+  def _summary(responses: list[httpx2.Response]) -> str:
     counts: dict[int, int] = {}
     for r in responses:
       counts[r.status_code] = counts.get(r.status_code, 0) + 1

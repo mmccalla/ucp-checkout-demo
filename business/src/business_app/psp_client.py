@@ -21,7 +21,7 @@ from typing import Any
 
 import sys
 
-import httpx
+import httpx2
 
 from . import store
 
@@ -43,7 +43,7 @@ def _total(checkout: Any) -> tuple[int | None, str]:
 
 
 def make_authorizer(
-    base_url: str | None = None, transport: httpx.BaseTransport | None = None
+    base_url: str | None = None, transport: httpx2.BaseTransport | None = None
 ) -> Callable[[str, Any, Any], None]:
     url = (base_url or os.environ.get("PSP_MOCK_URL") or _default_url()).rstrip("/")
 
@@ -60,10 +60,10 @@ def make_authorizer(
             "token": token,
         }
         try:
-            with httpx.Client(transport=transport, timeout=5.0) as c:
+            with httpx2.Client(transport=transport, timeout=5.0) as c:
                 telemetry.instrument_client(c, "business")
                 r = c.post(url + "/charges", json=body)
-        except httpx.HTTPError as e:
+        except httpx2.HTTPError as e:
             log.warning("psp not reachable: %s", type(e).__name__)
             raise UcpError(
                 "The payment processor is not available.", "psp_unavailable", 503

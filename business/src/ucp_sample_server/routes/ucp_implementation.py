@@ -31,7 +31,7 @@ from fastapi import Body
 from fastapi import Depends
 from fastapi import Path
 from fastapi.routing import APIRoute
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 import models
 from models import (
   UnifiedCartCreateRequest,
@@ -110,7 +110,7 @@ async def extract_webhook_url(ucp_agent: str) -> str | None:
   profile_uri = match.group(1)
 
   try:
-    async with httpx.AsyncClient() as client:
+    async with httpx2.AsyncClient() as client:
       response = await client.get(profile_uri)
       if response.status_code != 200:
         logger.error(
@@ -163,7 +163,7 @@ async def extract_webhook_url(ucp_agent: str) -> str | None:
               return str(cap.config.webhook_url)
 
       logger.warning("No webhook_url found in profile from %s", profile_uri)
-  except httpx.RequestError as e:
+  except httpx2.RequestError as e:
     logger.error("Network error fetching profile from %s: %s", profile_uri, e)
   except ValueError as e:
     logger.error("Failed to decode JSON profile from %s: %s", profile_uri, e)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from platform_app import main as pmain
@@ -23,7 +23,7 @@ from tests.s7.conftest import Recorder
 
 
 def stack(pair: Pair, active: list[str]) -> tuple[TestClient, Recorder]:
-    rec = Recorder(httpx.MockTransport(pair.biz.send))
+    rec = Recorder(httpx2.MockTransport(pair.biz.send))
     client = CatalogClient(
         BUSINESS,
         PROFILE_URL,

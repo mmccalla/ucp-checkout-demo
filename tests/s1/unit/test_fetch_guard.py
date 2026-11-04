@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import httpx
+import httpx2
 import pytest
 from ucp_core import netguard
 from ucp_core.constants import MAX_PROFILE_BYTES
@@ -19,8 +19,8 @@ def resolver_for(*addrs: str) -> netguard.Resolver:
     return r
 
 
-class NoConnect(httpx.BaseTransport):
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+class NoConnect(httpx2.BaseTransport):
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         raise AssertionError("the guard must refuse before any connection")
 
 
@@ -59,8 +59,8 @@ def test_http_url_is_refused() -> None:
 
 @pytest.mark.parametrize("status", [301, 302, 307, 308])
 def test_ac01_redirect_is_not_followed(status: int) -> None:
-    t = httpx.MockTransport(
-        lambda req: httpx.Response(status, headers={"Location": "https://other.example/"})
+    t = httpx2.MockTransport(
+        lambda req: httpx2.Response(status, headers={"Location": "https://other.example/"})
     )
     with pytest.raises(netguard.FetchError, match="redirect refused"):
         netguard.fetch_profile(URL, "127.0.0.1", resolver=resolver_for("127.0.0.1"), transport=t)
@@ -68,7 +68,7 @@ def test_ac01_redirect_is_not_followed(status: int) -> None:
 
 def test_body_over_limit_is_refused() -> None:
     big = b"[" + b"0," * (MAX_PROFILE_BYTES // 2) + b"0]"
-    t = httpx.MockTransport(lambda req: httpx.Response(200, content=big))
+    t = httpx2.MockTransport(lambda req: httpx2.Response(200, content=big))
     with pytest.raises(netguard.FetchError, match="over limit"):
         netguard.fetch_profile(URL, "127.0.0.1", resolver=resolver_for("127.0.0.1"), transport=t)
 

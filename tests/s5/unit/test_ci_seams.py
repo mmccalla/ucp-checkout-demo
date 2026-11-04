@@ -13,7 +13,7 @@ import json
 import pathlib
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from ucp_core import jwk, netns
@@ -245,18 +245,18 @@ class Hook:
     def __init__(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BUSINESS_EVENTS", str(tmp_path / "business.jsonl"))
         self.log = tmp_path / "business.jsonl"
-        self.sent: list[httpx.Request] = []
+        self.sent: list[httpx2.Request] = []
 
     def send(self, url: str, **kw: Any) -> str | None:
-        def inner(req: httpx.Request) -> httpx.Response:
+        def inner(req: httpx2.Request) -> httpx2.Response:
             self.sent.append(req)
-            return httpx.Response(200)
+            return httpx2.Response(200)
 
-        t = order_events.ObservedTransport(httpx.MockTransport(inner), **kw)
-        req = httpx.Request("POST", url, headers={"webhook-id": "w1"}, content=b"{}")
+        t = order_events.ObservedTransport(httpx2.MockTransport(inner), **kw)
+        req = httpx2.Request("POST", url, headers={"webhook-id": "w1"}, content=b"{}")
         try:
             asyncio.run(t.handle_async_request(req))
-        except httpx.ConnectError:
+        except httpx2.ConnectError:
             pass
         rows = (
             [json.loads(x) for x in self.log.read_text().splitlines()] if self.log.exists() else []

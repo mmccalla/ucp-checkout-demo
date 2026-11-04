@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
@@ -41,8 +41,8 @@ EVIDENCE = evidence_dir("S4", "traces")
 
 def _up() -> bool:
     try:
-        return httpx.get(JAEGER + "/api/v3/services", timeout=2).status_code == 200
-    except httpx.HTTPError:
+        return httpx2.get(JAEGER + "/api/v3/services", timeout=2).status_code == 200
+    except httpx2.HTTPError:
         return False
 
 
@@ -98,7 +98,7 @@ def fetch_trace(
     deadline = time.time() + timeout
     spans: list[dict[str, Any]] = []
     while time.time() < deadline:
-        r = httpx.get(f"{JAEGER}/api/v3/traces/{trace_id}", timeout=5)
+        r = httpx2.get(f"{JAEGER}/api/v3/traces/{trace_id}", timeout=5)
         spans = []
         if r.status_code == 200:
             for line in r.text.splitlines():
