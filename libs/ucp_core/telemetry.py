@@ -22,6 +22,7 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx2
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -99,7 +100,7 @@ def uninstrument_fastapi(app: Any) -> None:
     FastAPIInstrumentor.uninstrument_app(app)
 
 
-def instrument_client(client: Any, service: str) -> bool:
+def instrument_client(client: httpx2.Client | httpx2.AsyncClient, service: str) -> bool:
     """Add the client span (and the `traceparent` header) to an httpx2 client."""
     p = _providers.get(service) or init(service)
     if p is None:
