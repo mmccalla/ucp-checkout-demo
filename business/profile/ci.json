@@ -1,0 +1,105 @@
+{
+  "ucp": {
+    "version": "2026-04-08",
+    "services": {
+      "dev.ucp.shopping": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/overview",
+          "transport": "rest",
+          "endpoint": "{{ENDPOINT}}",
+          "schema": "https://ucp.dev/2026-04-08/services/shopping/rest.openapi.json"
+        }
+      ]
+    },
+    "capabilities": {
+      "dev.ucp.shopping.checkout": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+          "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json"
+        }
+      ],
+      "dev.ucp.shopping.fulfillment": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/fulfillment",
+          "schema": "https://ucp.dev/2026-04-08/schemas/shopping/fulfillment.json",
+          "extends": "dev.ucp.shopping.checkout"
+        }
+      ],
+      "dev.ucp.shopping.order": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/order",
+          "schema": "https://ucp.dev/2026-04-08/schemas/shopping/order.json"
+        }
+      ],
+      "dev.ucp.shopping.catalog.search": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/catalog/search",
+          "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_search.json"
+        }
+      ],
+      "dev.ucp.shopping.catalog.lookup": [
+        {
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/specification/catalog/lookup",
+          "schema": "https://ucp.dev/2026-04-08/schemas/shopping/catalog_lookup.json"
+        }
+      ]
+    },
+    "payment_handlers": {
+      "com.google.pay": [
+        {
+          "id": "gpay_demo_test_01",
+          "version": "2026-01-23",
+          "spec": "https://pay.google.com/gp/p/ucp/2026-01-23/",
+          "schema": "https://pay.google.com/gp/p/ucp/2026-01-23/schemas/config.json",
+          "config": {
+            "api_version": 2,
+            "api_version_minor": 0,
+            "environment": "TEST",
+            "merchant_info": {
+              "merchant_name": "UCP Demo Shop (TEST)",
+              "merchant_id": "TEST"
+            },
+            "allowed_payment_methods": [
+              {
+                "type": "CARD",
+                "parameters": {
+                  "allowed_auth_methods": [
+                    "PAN_ONLY"
+                  ],
+                  "allowed_card_networks": [
+                    "AMEX",
+                    "DISCOVER",
+                    "MASTERCARD",
+                    "VISA"
+                  ]
+                },
+                "tokenization_specification": {
+                  "type": "PAYMENT_GATEWAY",
+                  "parameters": {
+                    "gateway": "example",
+                    "gatewayMerchantId": "exampleGatewayMerchantId"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "dev.mock.payment_handler": [
+        {
+          "id": "mock_payment_handler",
+          "name": "mock_payment_handler",
+          "version": "2026-04-08",
+          "spec": "https://ucp.dev/2026-04-08/schemas/mock_payment_handler/spec",
+          "config": {}
+        }
+      ]
+    }
+  }
+}

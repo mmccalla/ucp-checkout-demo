@@ -1,0 +1,17 @@
+{
+  "_note": "Catalog text for the demo shop (S7). Price, title, image and stock come from the product and inventory tables, so that the catalog and the checkout agree. The key is the checkout item id (the variant id). The text is a design choice of the demo (not from the pinned UCP source).",
+  "products": {
+    "demo_tshirt": {
+      "product_id": "prod_demo_tshirt",
+      "handle": "demo-t-shirt",
+      "description": "A plain cotton T-shirt for the demo shop.",
+      "categories": ["Apparel"]
+    },
+    "demo_mug": {
+      "product_id": "prod_demo_mug",
+      "handle": "demo-mug",
+      "description": "A white ceramic mug for the demo shop.",
+      "categories": ["Homeware"]
+    }
+  }
+}

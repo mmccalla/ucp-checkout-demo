@@ -1,0 +1,12 @@
+# G5 approved failures (T-113, AC-119, AC-120). One test case for each line: <classname>.<name>, then "# reason".
+# G5 fails on a failure that is not in this list, and on a listed test that does not fail.
+# A change to this list needs a new ruling. 6 entries. Suite 016ecbc. Pin 9c9d6fc.
+# Entry card_credential_test: the test sends a raw card credential (type card) with handler_id mock_payment_handler (card_credential_test.py line 36). The pin says: "MUST NOT be used for checkout, only with payment handlers that tokenize or encrypt credentials" (source/schemas/shopping/types/card_credential.json line 5). The Business returns 400 invalid_request. The demo stays token-only.
+card_credential_test.CardCredentialTest.test_card_credential_payment  # raw card credential is not allowed for checkout (card_credential.json line 5)
+# Entries invalid_input_test and order_test: the test sends PUT /orders/{id} (invalid_input_test.py lines 73 and 130, order_test.py lines 306 and 352). The pin defines only Get Order (order.md lines 300 to 302, source/services/shopping/rest.openapi.json line 652). The Business does not mount PUT (business/src/business_app/main.py lines 296 to 304) and returns 405.
+invalid_input_test.InvalidInputTest.test_invalid_adjustment_status  # no update-order operation in the pin (order.md lines 300 to 302)
+invalid_input_test.InvalidInputTest.test_malformed_adjustment_payload  # no update-order operation in the pin (order.md lines 300 to 302)
+order_test.OrderTest.test_order_adjustments  # no update-order operation in the pin (order.md lines 300 to 302)
+order_test.OrderTest.test_order_update  # no update-order operation in the pin (order.md lines 300 to 302)
+# Entry protocol_test: the test sends UCP-Agent: profile="..." (suite 016ecbc, protocol_test.py line 320). The value has no scheme and no host. It is not a URL. The pinned code is invalid_profile_url (400), overview.md line 806 at 9c9d6fc. The HTTPS rule is at overview.md line 1222. The T-114 exception allows only the exact suite URL, so it does not fix this test.
+protocol_test.ProtocolTest.test_version_negotiation  # profile="..." is not a URL (overview.md lines 806 and 1222)

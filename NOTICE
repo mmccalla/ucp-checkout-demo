@@ -1,0 +1,174 @@
+ucp-checkout-demo
+Copyright (c) 2026 Mark McCalla.
+
+The code that Mark McCalla wrote uses the MIT licence. The text is in LICENSE.
+
+This repository also holds files that other people wrote. Those files keep their own licences.
+This NOTICE lists each such file or group of files with its source, its version, its licence,
+and the changes that we made. The file business/UPSTREAM.md gives more detail for the sample
+server. The file pins/PINS.toml gives the pinned versions. THIRD_PARTY.md lists the software
+that a user installs at run time. That software is not part of this repository.
+
+This project has no link with Google LLC, and Google LLC does not support or approve it. "Google" and
+"Google Pay" are trademarks of Google LLC. This project uses the names only to say which
+public interface the demo talks to. The "Pay" button of the CI stub (platform/web/checkout/gpay-stub.js)
+is a plain test button. It is not a Google Pay button.
+
+Where a licence below needs a copy of its text, the copy is in this repository.
+The list of the copies:
+
+  LICENSES/Apache-2.0.txt                                         Apache License 2.0
+  platform/web/checkout/vendor/material-symbols/LICENSE           Apache License 2.0 (Material Symbols)
+  tests/s3/e2e/vendor/axe-LICENSE                                 Mozilla Public License 2.0
+  tests/s3/e2e/vendor/axe-LICENSE-3RD-PARTY.txt                   MIT and ISC texts (parts of axe-core)
+
+================================================================================
+A. Files under the Apache License 2.0
+================================================================================
+
+A1. contracts/ucp-schemas/   (75 JSON files)
+    What: JSON Schemas of the Universal Commerce Protocol (UCP), version 2026-04-08.
+    Source: https://ucp.dev/2026-04-08/schemas/ (copied on 2026-10-24).
+    Source repository: https://github.com/Universal-Commerce-Protocol/ucp
+    Pinned commit: 9c9d6fce39ffa8bf7cb66309c378b79fb75b5382 (tag v2026-04-08).
+    The file discovery/profile.json is the file source/schemas/discovery/profile_schema.json of
+    that commit, as the hosted site publishes it.
+    Licence: Apache-2.0. Evidence: https://github.com/Universal-Commerce-Protocol/ucp/blob/9c9d6fce39ffa8bf7cb66309c378b79fb75b5382/LICENSE
+    Changes: none made by us. The hosted files differ from the repository files in 3 ways.
+    Each "$id" has the version in its path. Each relative "$ref" is an absolute URL.
+    Some files have a "version" key. The sha256 of each file is in
+    pins/schema-manifest.sha256.
+
+A2. contracts/ucp-schemas-2026-01-23/   (4 JSON files: shopping/types/card_payment_instrument.json,
+    payment_credential.json, payment_instrument.json, postal_address.json)
+    What: UCP schemas of version 2026-01-23. The Google Pay handler schema refers to them.
+    Source: https://ucp.dev/2026-01-23/schemas/ (copied on 2026-10-24).
+    Source repository: https://github.com/Universal-Commerce-Protocol/ucp
+    Pinned commit: dcf7eac71fc370dcc8768fcdbc5aa737037cca05 (tag v2026-01-23).
+    Licence: Apache-2.0. Evidence: https://github.com/Universal-Commerce-Protocol/ucp/blob/v2026-01-23/LICENSE
+    Changes: none made by us. The hosted-site differences of A1 apply.
+
+A3. contracts/composed/   (4 JSON files, a manifest, and a README)
+    What: JSON Schemas that tools/contracts/compose.py builds from the files of A1 and A2.
+    Licence: Apache-2.0, because these files derive from A1 and A2.
+    Changes: MODIFIED by us. The tool merges the schemas and changes references. Mark McCalla
+    adds his changes to these files under the MIT licence.
+
+A4. business/src/ucp_sample_server/   (35 files)
+    What: the REST sample server "rest/python/server".
+    Source: https://github.com/Universal-Commerce-Protocol/samples (folder rest/python/server)
+    Pinned commit: e7c9c124864108cbb35e5102beeac9cbef80a154.
+    Copyright 2026 UCP Authors. Licence: Apache-2.0.
+    Evidence: https://github.com/Universal-Commerce-Protocol/samples/blob/e7c9c124864108cbb35e5102beeac9cbef80a154/LICENSE
+    Each file that has a licence header keeps that header.
+    Changes: MODIFIED by us in 8 files. Each of these has a change notice after the licence header:
+      config.py, dependencies.py, exceptions.py, models.py, server.py, webhook_signer.py,
+      routes/ucp_implementation.py, services/checkout_service.py.
+    The script tools/vendor/patch_sample.py makes the changes. business/UPSTREAM.md lists the patches.
+    27 files have no change. We removed 2 upstream files: README.md and routes/discovery_profile.json.
+    The 6 files with no licence header upstream (__init__.py, generated_routes/__init__.py,
+    generated_routes/ucp_routes.py, pyproject.toml, routes/__init__.py, services/__init__.py) have
+    no header here.
+
+A5. business/profile/ci.json, business/profile/demo.json, platform/backend/profile/platform.json
+    What: UCP discovery profiles. They follow the example profile in the UCP documentation and in
+    the README of the sample server (same commit as A4).
+    Licence: Apache-2.0 for the parts that follow the examples. MODIFIED by us (URLs, handlers,
+    keys, and capabilities for this demo).
+
+A6. conformance/input/   (3 JSON files)
+    What: input files for the UCP conformance suite.
+    Source: https://github.com/Universal-Commerce-Protocol/conformance
+    Pinned commit: 016ecbc22240affdec4429a60d539bedd04ab51b (file conformance/PIN).
+    Copyright and licence: the suite is under Apache-2.0.
+    Evidence: https://github.com/Universal-Commerce-Protocol/conformance/blob/016ecbc22240affdec4429a60d539bedd04ab51b/LICENSE
+      test_fixtures.json: copy of test_data/flower_shop/test_fixtures.json. No change.
+      conformance_input.json: copy of test_data/flower_shop/conformance_input.json. MODIFIED by us:
+        required_capabilities lists only checkout, order, fulfillment. The upstream list also has
+        discount and buyer_consent.
+      shopping-agent-ci-profile.json: derived from shopping-agent-test.json of the suite.
+        MODIFIED by us: we added the empty keys "services" and "payment_handlers".
+    The suite itself is not in this repository. The gate fetches it at the pinned commit.
+
+A7. platform/web/checkout/vendor/material-symbols/   (5 SVG files, SHA256SUMS, LICENSE)
+    What: the icons sync_alt, history, science, theater_comedy, and laptop (file name of the
+    icon "computer" in the source) of Material Symbols (Outlined).
+    Source: https://github.com/google/material-design-icons
+    Pinned commit: 10ecc14790612ca8fd164e3f4ffe9c16fc50d5b7
+    (symbols/web/<name>/materialsymbolsoutlined/<name>_24px.svg)
+    Guide: https://developers.google.com/fonts/docs/material_symbols
+    Licence: Apache-2.0. Evidence: https://github.com/google/material-design-icons/blob/10ecc14790612ca8fd164e3f4ffe9c16fc50d5b7/LICENSE
+    Changes: none in the SVG files.
+    platform/web/checkout/app.js (lines 108 to 115) also has the path data of the same 5 icons.
+    tests/s4/unit/test_icons.py checks that the inline path data and the SVG files are the same. The inline copies are Apache-2.0 too.
+
+================================================================================
+B. Files under other licences
+================================================================================
+
+B1. tests/s3/e2e/vendor/axe-4.14.0.min.js
+    What: axe-core 4.14.0, a test tool for accessibility. Only the tests use it.
+    Source: https://www.npmjs.com/package/axe-core/v/4.14.0 and
+    https://github.com/dequelabs/axe-core/tree/v4.14.0
+    Copyright (c) 2015 - 2026 Deque Systems, Inc. (header in the file).
+    Licence: Mozilla Public License 2.0. The text is in tests/s3/e2e/vendor/axe-LICENSE.
+    Changes: none. The file is the file axe.min.js of the npm package, byte for byte.
+    Source code form: the MPL-2.0 source code of this file is at
+    https://github.com/dequelabs/axe-core/tree/v4.14.0 (and in the npm package above).
+    The file stays under the MPL-2.0. Mark McCalla's MIT licence does not apply to it.
+    Parts of axe-core under the MIT and ISC licences (12 MIT components and 9 ISC components, with
+    their copyright lines) are in tests/s3/e2e/vendor/axe-LICENSE-3RD-PARTY.txt.
+
+B2. .gitignore
+    What: based on the Python template of GitHub.
+    Source: https://github.com/github/gitignore/blob/main/Python.gitignore
+    Licence: CC0-1.0. Evidence: https://github.com/github/gitignore/blob/main/LICENSE
+    Changes: MODIFIED by us (7 lines of the template changed or added, and the line "evidence/" added).
+
+B3. pins/jaeger-signing-key.asc
+    What: the PUBLIC signing key of the Jaeger release files (fingerprint
+    BD0B026014C725261C947887B42D1DB0F079690F). The script tools/jaeger.sh uses it to check the signature.
+    Source: https://www.jaegertracing.io/download/
+    Licence: none stated. This is a public key, not a work of code. It is not changed.
+
+================================================================================
+C. Files with no confirmed licence
+================================================================================
+
+C1. contracts/gpay-handler/   (2 files: config.json, card_payment_instrument.json)
+    What: the schemas of the Google Pay handler "com.google.pay" for UCP, version 2026-01-23.
+    Source URL: https://pay.google.com/gp/p/ucp/2026-01-23/schemas/
+    Fetch date: 2026-11-04 08:19:46 UTC (HTTP GET of each file, raw bytes, no change).
+    sha256 of card_payment_instrument.json:
+      fb1c094ae9df331c3b8cb6bd756037f23438ddd89e66b071bdf3a8f0e4daf2d0
+    sha256 of config.json:
+      fa6f55884b7808ddd34eb8ad860b755a6f7df076b8a6d263f267643c2c28a19d
+    pins/schema-manifest.sha256 holds the same values. Google can change the hosted files.
+    The first copy was made on 2026-10-24. Since then, Google changed one description in
+    config.json. card_payment_instrument.json has no change.
+    Changes: none made by us.
+    Licence: not confirmed. The hosted files state no licence. Mark asks Google to confirm.
+
+================================================================================
+D. Files that follow a public format, with no copied text
+================================================================================
+
+D1. business/data/demo/*.csv (the first line only)
+    The column names follow the import format of the sample server (A4) and of the data files
+    of the conformance suite (A6). The data rows are our own.
+D2. contracts/fixtures/gpay-handler-test.json
+    Our own test data. The structure follows the Google Pay handler schema (C1) and the
+    example in the Google Pay UCP page https://pay.google.com/gp/p/ucp/2026-01-23/. The
+    values "gateway": "example" and "gatewayMerchantId": "exampleGatewayMerchantId" are the
+    placeholder values in that page.
+
+================================================================================
+THIRD_PARTY: software that a user installs at run time (not in this repository)
+================================================================================
+
+The file THIRD_PARTY.md lists each Python package that uv.lock pins (77 packages, with version,
+role, and licence) and each tool that the scripts download (Caddy, Jaeger, ucp-schema, Chromium
+for Playwright, and the Google Pay library). The packages use these licences: MIT, Apache-2.0,
+BSD-3-Clause, BSD-2-Clause, MPL-2.0 (certifi, fqdn, pathspec), ISC, MIT-0, Unlicense, and
+PSF-2.0. The licence of one package (colorama, Windows only) is UNVERIFIED.
+This repository does not include any of that software.

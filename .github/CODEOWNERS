@@ -1,0 +1,19 @@
+# Draft. Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# GitHub reads CODEOWNERS in `.github/`, in the root, or in `docs/` (first one found, in that order).
+# A file in `.github/` can have its own owner line, as the docs advise (see the last lines).
+# The last matching line wins. The owner of a path gets a review request for each pull request that changes the path.
+# The owner is @mmccalla (decision of Mark, 2026-11-03).
+# The ruleset in `repo-settings/plan.md` sets "require code owner review" to false.
+# With one owner, a code owner review would lock the owner out of his own pull requests.
+
+# Default owner for the whole repository
+*                       @mmccalla
+
+# Files for the safety of the project and for the checks
+/.github/               @mmccalla
+/.github/CODEOWNERS     @mmccalla
+/SECURITY.md            @mmccalla
+/LICENSE                @mmccalla
+/NOTICE                 @mmccalla
+/LICENSES/              @mmccalla
+/tools/gates/           @mmccalla

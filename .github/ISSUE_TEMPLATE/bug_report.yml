@@ -1,0 +1,75 @@
+# Draft. Docs: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms
+# Place: `.github/ISSUE_TEMPLATE/bug_report.yml`.
+name: Bug report
+description: Tell us about a fault in the demo.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not put secret data in this issue. A log can contain a token. Read it before you copy it.
+        For a security problem, read `SECURITY.md`. Do not use this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Write the result that you get and the result that you expect.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to repeat the fault
+      description: Write each command or action. Start from a clean clone.
+      placeholder: |
+        1. git clone ...
+        2. uv sync --locked
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Write the output of `git rev-parse HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and versions
+      description: Example - Ubuntu 24.04, Python 3.12, uv 0.13.6.
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options:
+        - README or documents
+        - Platform (client)
+        - Business (server)
+        - PSP mock
+        - Gates or tools
+        - Browser page (checkout)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste the part of the log that shows the fault. It goes in a code block.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the open and closed issues.
+          required: true
+        - label: I read the log and it has no secret data.
+          required: true
+        - label: I read `CODE_OF_CONDUCT.md`.
+          required: true

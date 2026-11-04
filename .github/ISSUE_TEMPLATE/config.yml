@@ -1,0 +1,8 @@
+# Draft. Docs: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+# Place: `.github/ISSUE_TEMPLATE/config.yml`.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    # Mark must turn on private vulnerability reporting in the repository settings first.
+    url: https://github.com/mmccalla/ucp-checkout-demo/security/advisories/new
+    about: Do not open a public issue for a security problem. Use the private form.

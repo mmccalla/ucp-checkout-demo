@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UCP checkout with Google Pay - demo</title>
+  <link rel="stylesheet" href="/checkout/app.css">
+</head>
+<body>
+  <header id="mode-banner">
+    <p id="banner-text" class="banner-test">
+      <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="20" height="20"><path d="M9 2h6v2h-1v5.2l5.6 9.7A2 2 0 0 1 17.9 22H6.1a2 2 0 0 1-1.7-3.1L10 9.2V4H9z" fill="currentColor"/></svg>
+      <strong id="banner-label">TEST MODE.</strong>
+      <span id="banner-detail">Google Pay TEST — dummy token, cannot be charged. Simulated payment processor. No real money moves.</span>
+    </p>
+    <a class="skip" href="#screen-title">Skip to the buyer view</a>
+  </header>
+  <div class="layout">
+    <main id="buyer-view" aria-label="Buyer view">
+      <div id="screen"></div>
+    </main>
+    <aside id="inspector" aria-labelledby="inspector-title">
+      <h2 id="inspector-title">Protocol inspector</h2>
+      <button type="button" id="toggle-inspector" aria-expanded="false" aria-controls="inspector-body">Show inspector</button>
+      <div id="inspector-body">
+        <div id="run-controls" role="group" aria-label="Run controls">
+          <button type="button" id="next-step" disabled>Next step</button>
+          <button type="button" id="pause" aria-pressed="false" disabled>Pause</button>
+          <button type="button" id="replay" disabled>Replay</button>
+          <a id="export" href="/api/timeline/export" download="ucp-demo-timeline.json">Export timeline (JSON)</a>
+        </div>
+        <p id="pending">No step is waiting.</p>
+        <p id="inspector-empty">No messages yet. Select 'Start demo'.</p>
+        <ol id="msg-list" aria-label="Messages"></ol>
+        <section id="msg-detail" aria-label="Message detail" hidden></section>
+      </div>
+    </aside>
+  </div>
+  <div id="announcer" role="status" aria-live="polite" class="visually-hidden"></div>
+  <script src="/checkout/app.js"></script>
+</body>
+</html>

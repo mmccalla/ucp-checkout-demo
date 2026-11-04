@@ -1,0 +1,20 @@
+{
+  "ucp": {
+    "version": "{ucp_version}",
+    "services": {},
+    "payment_handlers": {},
+    "capabilities": {
+      "dev.ucp.shopping.order": [
+        {
+          "name": "dev.ucp.shopping.order",
+          "version": "{ucp_version}",
+          "spec": "https://ucp.dev/{ucp_version}/specification/order/",
+          "schema": "https://ucp.dev/{ucp_version}/schemas/shopping/order.json",
+          "config": {
+            "webhook_url": "http://localhost:{webhook_port}/webhooks/partners/test_partner/events/order"
+          }
+        }
+      ]
+    }
+  }
+}

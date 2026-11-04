@@ -1,0 +1,49 @@
+# Draft. Docs: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-issue-forms
+# Place: `.github/ISSUE_TEMPLATE/feature_request.yml`.
+name: Feature request
+description: Suggest a change or a new function.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for your idea. This project is a small demo. The owner can say no to a change that makes the scope big.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: Write the problem first, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: Write what you want the demo to do.
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: Other ways
+      description: Write other ways that you thought about, and why they are not good.
+  - type: dropdown
+    id: help
+    attributes:
+      label: Can you do the work?
+      options:
+        - "Yes, I can send a pull request"
+        - "Yes, with some help"
+        - "No"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the open and closed issues.
+          required: true
+        - label: I read `CODE_OF_CONDUCT.md`.
+          required: true

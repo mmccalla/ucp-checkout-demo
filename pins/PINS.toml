@@ -1,0 +1,66 @@
+# Upstream pins (spec T-06, T-90, T-34). Gate G1 checks the repository against this file (AC-118).
+# Each commit was checked with the GitHub API on 2026-10-24 (local log, not in this repository).
+
+[ucp]
+repo = "https://github.com/Universal-Commerce-Protocol/ucp"
+version = "2026-04-08"
+tag = "v2026-04-08"
+commit = "9c9d6fce39ffa8bf7cb66309c378b79fb75b5382"
+schema_base = "https://ucp.dev/2026-04-08/schemas/"
+manifest = "pins/schema-manifest.sha256"
+
+[gpay_handler]
+name = "com.google.pay"
+version = "2026-01-23"
+spec = "https://pay.google.com/gp/p/ucp/2026-01-23/"
+schema_base = "https://pay.google.com/gp/p/ucp/2026-01-23/schemas/"
+# Hosted copy fetched on 2026-11-04 08:19:46 UTC. The sha256 of each file is in the manifest.
+fetched_utc = "2026-11-04T08:19:46Z"
+
+[ucp_mixed_version]
+# Added in S1 (spec T-87, input-data D.1.1). The pinned com.google.pay instrument schema has
+# `$ref` targets at this UCP version. Each file has its D.1.1 sha256 in the manifest.
+# This entry adds a pin. It does not change an existing pin.
+version = "2026-01-23"
+schema_base = "https://ucp.dev/2026-01-23/schemas/"
+source = "input-data.md D.1.1"
+
+[ucp_sdk]
+repo = "https://github.com/Universal-Commerce-Protocol/python-sdk"
+pypi = "ucp-sdk"
+version = "0.4.6"
+tag = "v2026-04-08-6"
+commit = "51bf73cec92cfe321a9282b8f49fc8f647068c2e"
+wheel_sha256 = "540beaf7913786880157780493065464fb4d59d37b6932289b7048f57f459fe9"
+
+[ucp_schema]
+repo = "https://github.com/Universal-Commerce-Protocol/ucp-schema"
+version = "1.4.1"
+tag = "v1.4.1"
+commit = "6dd2a613d38828c97dca723bdb9ccfc79b2a7e80"
+
+[samples]
+repo = "https://github.com/Universal-Commerce-Protocol/samples"
+commit = "e7c9c124864108cbb35e5102beeac9cbef80a154"
+
+[conformance]
+repo = "https://github.com/Universal-Commerce-Protocol/conformance"
+commit = "016ecbc22240affdec4429a60d539bedd04ab51b"
+test_methods = 77
+
+[caddy]
+version = "2.11.7"
+asset = "caddy_2.11.7_linux_amd64.tar.gz"
+sha512 = "a7a433a1b133efc3c8d10eb0b99d52a24b5ef5c322dc77f5282182b1c0402139ab83f3a99f0c52409df77d20123fb0b523edad8a66d8f5e49136197bf61ef0e7"
+
+[jaeger]
+# T-106: the official release binary replaces the image (ADR 0013).
+version = "2.22.0"
+url = "https://github.com/jaegertracing/jaeger/releases/download/v2.22.0/jaeger-2.22.0-linux-amd64.tar.gz"
+asset = "jaeger-2.22.0-linux-amd64.tar.gz"
+sha256_archive = "cb0c0be9a4b8fba424bbbc6217b0feb0adeea3bca5b73a83db1af31bb7d34389"
+sha256_binary = "fa574f53e2f739301f301f66e5608c84d0b9a90cdd08e4f6cba8809d171854e1"
+signing_key_fingerprint = "BD0B026014C725261C947887B42D1DB0F079690F"
+
+[python]
+version = "3.12"

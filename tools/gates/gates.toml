@@ -1,0 +1,90 @@
+# Gates for each slice (04-build-plan.md rule 5). The summary fails if a report is missing.
+current_slice = "S7"
+
+[slices]
+S0 = ["G1", "G2"]
+S1 = ["G1", "G2", "G3", "G4"]
+S2 = ["G1", "G2", "G3", "G4"]
+S3 = ["G1", "G2", "G3", "G4", "G7"]
+# S4 exit (04-build-plan): G1 to G4, G6 and G7. Order: G1, G2, G3, G4, G6, G7 (T-92).
+S4 = ["G1", "G2", "G3", "G4", "G6", "G7"]
+# S5 (build plan): G5 (conformance, `conformance/gate.py`) is the gate under test. It FAILS now
+# (docs/S5-g5-analysis.md) and is not in the list. It joins when it passes. G8 joins in the same way.
+S5 = ["G1", "G2", "G3", "G4", "G6", "G7"]
+# S6: G8 (latency, AC-117) and the readiness check (AC-58) pass, so G8 is in the list.
+S6 = ["G1", "G2", "G3", "G4", "G6", "G7", "G8"]
+# S7 (catalog, branch s7): same gates. G3 and G4 also run tests/s7.
+S7 = ["G1", "G2", "G3", "G4", "G6", "G7", "G8"]
+
+# G3: unit and component tests. G4: contract and live tests (the layout must run).
+[pytest_paths.G3]
+S1 = ["tests/test_s0.py", "tests/s1/unit"]
+S2 = ["tests/test_s0.py", "tests/s1/unit", "tests/s2/unit"]
+S3 = ["tests/test_s0.py", "tests/s1/unit", "tests/s2/unit", "tests/s3/unit", "tests/s4/unit"]
+S4 = ["tests/test_s0.py", "tests/s1/unit", "tests/s2/unit", "tests/s3/unit", "tests/s4/unit"]
+S5 = [
+    "tests/test_s0.py", "tests/s1/unit", "tests/s2/unit", "tests/s3/unit", "tests/s4/unit",
+    "tests/s5/unit", "tests/s6/unit",
+]
+S6 = [
+    "tests/test_s0.py", "tests/s1/unit", "tests/s2/unit", "tests/s3/unit", "tests/s4/unit",
+    "tests/s5/unit", "tests/s6/unit",
+]
+S7 = [
+    "tests/test_s0.py", "tests/s1/unit", "tests/s2/unit", "tests/s3/unit", "tests/s4/unit",
+    "tests/s5/unit", "tests/s6/unit", "tests/s7/unit",
+]
+
+[pytest_paths.G4]
+S1 = ["tests/s1/contract"]
+S2 = ["tests/s1/contract", "tests/s2/contract"]
+S3 = ["tests/s1/contract", "tests/s2/contract"]
+S4 = ["tests/s1/contract", "tests/s2/contract", "tests/s4/contract"]
+S5 = ["tests/s1/contract", "tests/s2/contract", "tests/s4/contract", "tests/s5/contract"]
+S6 = ["tests/s1/contract", "tests/s2/contract", "tests/s4/contract", "tests/s5/contract"]
+S7 = [
+    "tests/s1/contract", "tests/s2/contract", "tests/s4/contract", "tests/s5/contract",
+    "tests/s7/contract",
+]
+
+# G6: request and webhook signatures on (02-design 17.3, T-04). AC-64 to AC-75, AC-113.
+[pytest_paths.G6]
+S4 = ["tests/s4/g6"]
+S5 = ["tests/s4/g6"]
+S6 = ["tests/s4/g6"]
+S7 = ["tests/s4/g6"]
+
+# G7: headless e2e in Chrome with the Google Pay CI stub, keyboard, axe-core 4.14.0 (S3).
+[pytest_paths.G7]
+S3 = ["tests/s3/e2e"]
+S4 = ["tests/s3/e2e"]
+S5 = ["tests/s3/e2e"]
+S6 = ["tests/s3/e2e"]
+S7 = ["tests/s3/e2e", "tests/s7/e2e"]
+
+[g2_extra.S1]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+
+[g2_extra.S2]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]
+
+[g2_extra.S3]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]
+
+[g2_extra.S4]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]
+
+[g2_extra.S5]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]
+
+[g2_extra.S6]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]
+
+[g2_extra.S7]
+"lint --strict contracts/ucp-schemas-2026-01-23" = ["python", "tools/gates/ucp_schema_cli.py", "lint", "--strict", "contracts/ucp-schemas-2026-01-23"]
+"compose --check (contracts/composed, AC-104)" = ["python", "tools/contracts/compose.py", "--check"]

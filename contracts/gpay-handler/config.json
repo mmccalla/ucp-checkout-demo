@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pay.google.com/gp/p/ucp/2026-01-23/schemas/config.json",
+  "title": "Google Pay Payment Handler Configuration",
+  "description": "Configuration schema for the com.google.pay payment handler.",
+  "type": "object",
+  "required": [
+    "api_version",
+    "api_version_minor",
+    "environment",
+    "merchant_info",
+    "allowed_payment_methods"
+  ],
+  "properties": {
+    "api_version": {
+      "type": "integer",
+      "const": 2,
+      "description": "The major Google Pay API version. Currently, this must be 2."
+    },
+    "api_version_minor": {
+      "type": "integer",
+      "const": 0,
+      "description": "The minor Google Pay API version. Currently, this must be 0."
+    },
+    "environment": {
+      "type": "string",
+      "enum": [
+        "TEST",
+        "PRODUCTION"
+      ],
+      "description": "The Google Pay environment."
+    },
+    "merchant_info": {
+      "description": "Identity details for the merchant as required by the Google Pay UCP handler.",
+      "type": "object",
+      "required": [
+        "merchant_id"
+      ],
+      "properties": {
+        "merchant_name": {
+          "type": "string",
+          "description": "The user-facing name of the merchant that will appear on the Google Pay payment sheet."
+        },
+        "merchant_id": {
+          "type": "string",
+          "description": "The Google Pay Merchant ID. Use a dummy value or 'TEST' for the TEST environment as configured in the handler configuration; use the real Merchant ID for PRODUCTION.",
+          "pattern": "^[0-9a-zA-Z]+$"
+        },
+        "merchant_origin": {
+          "type": "string",
+          "description": "The fully qualified domain name where the checkout occurs.",
+          "format": "hostname"
+        },
+        "auth_jwt": {
+          "type": "string",
+          "description": "An optional authorization JWT for certain integration contexts."
+        }
+      }
+    },
+    "allowed_payment_methods": {
+      "type": "array",
+      "items": {
+        "description": "Configuration options for an allowed payment method and its tokenization or processing specifications.",
+        "type": "object",
+        "required": [
+          "type",
+          "parameters",
+          "tokenization_specification"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "CARD"
+            ],
+            "description": "An identifier for the type of supported payment method. CARD is the only supported value."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Parameters required to configure the provided payment method type. For the CARD type use CardParameters.",
+            "additionalProperties": false,
+            "required": [
+              "allowed_auth_methods",
+              "allowed_card_networks"
+            ],
+            "properties": {
+              "allowed_auth_methods": {
+                "type": "array",
+                "description": "Fields supported to authenticate a card transaction. PAN_ONLY returns PAN and expiration for cards on file with the user's Google Account.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "PAN_ONLY"
+                  ]
+                }
+              },
+              "allowed_card_networks": {
+                "type": "array",
+                "description": "The card networks supported by the merchant and the Google Pay API.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "AMEX",
+                    "DISCOVER",
+                    "ELECTRON",
+                    "ELO",
+                    "ELO_DEBIT",
+                    "INTERAC",
+                    "JCB",
+                    "MAESTRO",
+                    "MASTERCARD",
+                    "VISA"
+                  ]
+                }
+              },
+              "allow_prepaid_cards": {
+                "type": "boolean",
+                "description": "Set to false if you don't support prepaid cards. Default is true."
+              },
+              "allow_credit_cards": {
+                "type": "boolean",
+                "description": "Set to false if you don't support credit cards. Default is true."
+              },
+              "assurance_details_required": {
+                "type": "boolean",
+                "description": "Set to true to request assurance details."
+              },
+              "billing_address_required": {
+                "type": "boolean",
+                "description": "Set to true if you require a billing address."
+              },
+              "billing_address_parameters": {
+                "type": "object",
+                "description": "The expected fields returned if billing_address_required is set to true.",
+                "additionalProperties": false,
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "description": "Billing address format required to complete the transaction.",
+                    "enum": [
+                      "MIN",
+                      "FULL",
+                      "FULL-ISO3166"
+                    ]
+                  },
+                  "phone_number_required": {
+                    "type": "boolean",
+                    "description": "Set to true if a phone number is required to process the transaction."
+                  }
+                }
+              }
+            }
+          },
+          "tokenization_specification": {
+            "description": "Configure an account or decryption provider to receive payment information. This property is required for the CARD payment method.",
+            "type": "object",
+            "required": [
+              "type",
+              "parameters"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "DIRECT",
+                  "PAYMENT_GATEWAY"
+                ],
+                "description": "A payment method tokenization type is supported for the given PaymentMethod. For the CARD payment method, use PAYMENT_GATEWAY or DIRECT."
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Parameters specific to the selected payment method tokenization type."
+              }
+            }
+          }
+        }
+      },
+      "description": "The payment methods allowed for this transaction."
+    }
+  },
+  "examples": [
+    {
+      "api_version": 2,
+      "api_version_minor": 0,
+      "environment": "PRODUCTION",
+      "merchant_info": {
+        "merchant_id": "348159138575927391",
+        "merchant_name": "Test Business"
+      },
+      "allowed_payment_methods": [
+        {
+          "type": "CARD",
+          "parameters": {
+            "billing_address_required": true,
+            "billing_address_parameters": {
+              "phone_number_required": false,
+              "format": "FULL"
+            },
+            "allowed_card_networks": [
+              "VISA",
+              "MASTERCARD",
+              "AMEX",
+              "DISCOVER",
+              "INTERAC"
+            ],
+            "allowed_auth_methods": [
+              "PAN_ONLY"
+            ],
+            "allow_prepaid_cards": true,
+            "assurance_details_required": false,
+            "allow_credit_cards": true
+          },
+          "tokenization_specification": {
+            "type": "PAYMENT_GATEWAY",
+            "parameters": {
+              "gateway": "example_gateway",
+              "gatewayMerchantId": "example_gateway_merchant_id"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

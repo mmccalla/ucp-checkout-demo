@@ -1,0 +1,11 @@
+# G5 approved skips (AC-119, T-94). One test case for each line: <classname>.<name>, then "# reason".
+# G5 fails on a skip that is not in this list, and on a listed test that does not skip.
+# 6 discount tests (T-94): the Business does not advertise dev.ucp.shopping.discount (03-spec.md 1.2).
+discount_test.DiscountTest.test_allocations_sum_to_applied_amount  # discount out of scope (section 1.2)
+discount_test.DiscountTest.test_client_applied_does_not_change_price  # discount out of scope (section 1.2)
+discount_test.DiscountTest.test_code_matches_case_insensitively  # discount out of scope (section 1.2)
+discount_test.DiscountTest.test_codes_replace_previous_set  # discount out of scope (section 1.2)
+discount_test.DiscountTest.test_discount_total_is_negative  # discount out of scope (section 1.2)
+discount_test.DiscountTest.test_empty_codes_removes_discount  # discount out of scope (section 1.2)
+# The suite skips this test itself: @unittest.skip("Schemas not yet published on remote ucp.dev domain") at protocol_test.py line 101 (suite 016ecbc). T-94 amendment (spec v1.1.9).
+protocol_test.ProtocolTest.test_discovery_urls  # suite's own unconditional skip, needs external network that G5 does not give (T-94 amendment)

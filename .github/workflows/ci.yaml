@@ -1,0 +1,124 @@
+# CI: the gates of the current slice (tools/gates/gates.toml), then the full test run (spec T-92, 02-design 17.3).
+# Repository: mmccalla/ucp-checkout-demo.
+#
+# Rules for this file (project rule of 28 Oct 2026):
+#  - Every action is pinned to a full commit SHA, with the version in a comment. No `latest`.
+#  - Every tool has a pinned version: uv, Python, ucp-schema (commit), Caddy (sha512), Jaeger (sha256 + gpg).
+#  - No path of the box. All paths come from the repository root or from the environment variables set in "Set the paths".
+#  - The runner image (ubuntu-24.04) is a moving label: GitHub does not let a workflow pin an image version.
+#    The step "Log the tool versions" writes the image version and the versions of the tools of the image.
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  gates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # No MODE here. The default is MODE=demo, the same mode as the box gates. MODE=ci makes each process
+    # create a new ephemeral signing key (platform_app.main.signing_key). The G8 driver is a second process,
+    # so the Business refuses its signed requests (HTTP 401) and G8 fails with 100 % errors.
+    # Found by the fresh-clone repro of 28 Oct 2026 (the first CI run that reaches G8 would fail the same way).
+    steps:
+      # actions/checkout v5.1.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set the paths
+        run: |
+          {
+            echo "UCP_TOOLS_DIR=$RUNNER_TEMP/tools"
+            echo "UCP_EVIDENCE_DIR=$GITHUB_WORKSPACE/.run/evidence"
+            echo "UCP_SCHEMA_BIN=$RUNNER_TEMP/tools/ucp-schema/bin/ucp-schema"
+            echo "CADDY=$RUNNER_TEMP/tools/caddy-bin/caddy"
+            echo "JAEGER_DIR=$RUNNER_TEMP/tools/jaeger"
+            echo "UCP_CAPTURE_DIR=$RUNNER_TEMP/failure-capture"
+          } >> "$GITHUB_ENV"
+      - run: sudo apt-get install -y pkg-config libssl-dev
+      # astral-sh/setup-uv v7.6.0; uv 0.13.6
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.13.6"
+          enable-cache: false
+      - run: uv python install 3.12.16 && uv sync --locked
+      # ucp-schema 1.4.1 (tag v1.4.1, commit 6dd2a61). Install doc: "Installation" in the README at
+      # https://github.com/Universal-Commerce-Protocol/ucp-schema/blob/v1.4.1/README.md
+      # (`cargo install ucp-schema` from crates.io, or `cargo install --path .` from a clone). We build the
+      # pinned commit with `cargo install --locked --git ... --rev <commit>`: same source as the tag, and the
+      # Cargo.lock of that commit is used. The tests need the tool: a skip counts as a gate failure.
+      - name: ucp-schema 1.4.1 (commit 6dd2a61)
+        run: |
+          cargo install --locked --git https://github.com/Universal-Commerce-Protocol/ucp-schema --rev 6dd2a613d38828c97dca723bdb9ccfc79b2a7e80 --root "$UCP_TOOLS_DIR/ucp-schema"
+          test "$("$UCP_SCHEMA_BIN" --version)" = "ucp-schema 1.4.1"
+      - name: Caddy 2.11.7 (sha512 from pins/PINS.toml)
+        run: tools/get_caddy.sh "$UCP_TOOLS_DIR/caddy-bin"
+      - name: Jaeger 2.22.0 (sha256 and gpg signature from pins/PINS.toml)
+        run: |
+          mkdir -p "$JAEGER_DIR" && cd "$JAEGER_DIR"
+          base=https://github.com/jaegertracing/jaeger/releases/download/v2.22.0
+          curl -fsSLO "$base/jaeger-2.22.0-linux-amd64.tar.gz"
+          curl -fsSLO "$base/jaeger-2.22.0-linux-amd64.tar.gz.asc"
+          tar -xzf jaeger-2.22.0-linux-amd64.tar.gz
+          cd "$GITHUB_WORKSPACE" && tools/jaeger.sh verify
+      # Debug step (read only). It logs the kernel and the AppArmor switch for user namespaces before the
+      # `unshare` check below. It must not fail the job: `|| true` covers a missing key and a missing sysctl.
+      - name: Debug the kernel and the user namespace switch (read only)
+        run: |
+          echo "kernel: $(uname -r)"
+          echo "sysctl: $(sysctl kernel.apparmor_restrict_unprivileged_userns 2>&1 || true)"
+      # G8 (T-109) runs the layout in a private network namespace (`unshare --map-root-user --net`).
+      # ubuntu-24.04 restricts unprivileged user namespaces with AppArmor, so `unshare` fails with
+      # "write failed /proc/self/uid_map: Operation not permitted". This step turns the restriction off for this
+      # runner only (the VM is new for each job and is deleted after it). It does not change G8 or T-109.
+      # Official sources (details in docs/S7-ci-g8-netns-options.md):
+      #  - Ubuntu 24.04 LTS (Noble Numbat) Release Notes, "Unprivileged user namespace restrictions":
+      #    https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890
+      #    (disable for one boot: echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns)
+      #  - Ubuntu blog, "Restricted unprivileged user namespaces are coming to Ubuntu 23.10":
+      #    https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces
+      #    (sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)
+      #  - AppArmor wiki, unprivileged user namespace restriction:
+      #    https://gitlab.com/apparmor/apparmor/-/wikis/unprivileged_userns_restriction
+      #  - GitHub-hosted runners have passwordless sudo:
+      #    https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges
+      - name: Allow unprivileged user namespaces for G8 (CI only)
+        run: |
+          echo "before: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo "after: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns)"
+          unshare --map-root-user --net true
+      - name: Log the tool versions
+        run: |
+          echo "image: ${ImageOS:-?} ${ImageVersion:-?}"
+          uname -r; python3 --version; uv --version; "$UCP_SCHEMA_BIN" --version; "$CADDY" version
+          cargo --version; rustc --version; google-chrome --version; gpg --version | head -1; ip -V
+          .venv/bin/python --version
+      - name: Jaeger start (before the layout, so the services send spans to it)
+        run: |
+          tools/jaeger.sh start
+          for _ in $(seq 1 100); do curl -fs http://127.0.0.1:16686/api/v3/services >/dev/null 2>&1 && exit 0; sleep 0.3; done
+          echo "Jaeger did not start"; cat .run/jaeger.log; exit 1
+      - run: tools/run_local.sh start
+      - run: tools/gates/run_all.sh .run/gates
+      # The wrapper runs the same pytest command. It adds a plugin that keeps the Playwright trace of a failed
+      # e2e test, and it runs `vmstat -t 1` while pytest runs. If pytest fails, it also saves a `ps` snapshot and
+      # `dmesg` (dmesg can be restricted: the script then saves the reason). If pytest passes, nothing stays.
+      # It changes no test, no timeout, no wait and no retry. Details: docs/S7-ci-failure-capture.md.
+      - name: pytest (failure capture)
+        run: tools/ci-repro/capture_on_failure.sh uv run --no-sync pytest -q
+      - run: tools/run_local.sh stop
+        if: always()
+      - run: tools/jaeger.sh stop
+        if: always()
+      # The capture of a failed run (see the step "pytest (failure capture)"), only if a step of the job failed.
+      # Kept 7 days. If the folder does not exist (a step before pytest failed), the action ignores it.
+      # Docs: https://docs.github.com/en/actions/tutorials/store-and-share-data (retention-days) and
+      # https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts (retention).
+      # actions/upload-artifact v7.0.2 (release of 2026-10-07)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: failure()
+        with:
+          name: failure-capture
+          path: ${{ env.UCP_CAPTURE_DIR }}
+          retention-days: 7
+          if-no-files-found: ignore

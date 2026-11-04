@@ -1,0 +1,98 @@
+/* UCP demo checkout page. WCAG 2.2 AA: contrast (1.4.3, 1.4.11), reflow at 320 CSS px (1.4.10),
+   target size at least 24 by 24 CSS px (2.5.8), visible focus (2.4.7). */
+:root { --fg: #1a1a1a; --muted: #3d3d3d; --bg: #ffffff; --line: #6b6b6b; --accent: #0b57d0;
+  /* Design token font.family.code (UX-4.5.1, approved). One monospace stack for each code element. */
+  --font-family-code: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --ok: #0a6b2b; --bad: #a3001b; --warn-bg: #fff4ce; --warn-fg: #3d2e00; }
+* { box-sizing: border-box; }
+html { font-size: 100%; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg);
+  background: var(--bg); line-height: 1.5; overflow-wrap: anywhere; }
+#mode-banner { background: var(--warn-bg); color: var(--warn-fg); border-bottom: 2px solid var(--warn-fg);
+  padding: 0.5rem 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
+#mode-banner p { margin: 0; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+#mode-banner.replay { background: #e8eefc; color: #102a5c; border-color: #102a5c; }
+#mode-banner a { color: inherit; }
+.icon { flex: none; vertical-align: middle; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; padding: 1rem; max-width: 90rem; margin: 0 auto; }
+@media (min-width: 1024px) {
+  .layout { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  #toggle-inspector { display: none; }
+  #inspector-body { display: block !important; }
+}
+@media (max-width: 1023.98px) { #inspector-body.closed { display: none; } }
+main, aside { min-width: 0; }
+aside { border-left: 0; border-top: 2px solid var(--line); padding-top: 0.5rem; }
+@media (min-width: 1024px) { aside { border-top: 0; border-left: 2px solid var(--line); padding: 0 0 0 1rem; } }
+h1 { font-size: 1.6rem; margin: 0.5rem 0; }
+h1:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+h2 { font-size: 1.25rem; }
+button, .button, select, input { font: inherit; min-height: 44px; min-width: 44px; }
+button, .button { padding: 0.5rem 1rem; border-radius: 4px; border: 2px solid var(--fg); background: var(--bg);
+  color: var(--fg); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 0.4rem; }
+button.primary { background: var(--accent); color: #ffffff; border-color: var(--accent); }
+button[disabled] { color: #595959; border-color: #595959; cursor: not-allowed; }
+button.primary[disabled] { background: #e6e6e6; color: #595959; border-color: #595959; }
+button[aria-pressed="true"] { background: var(--fg); color: #ffffff; }
+input, select { border: 2px solid var(--line); border-radius: 4px; padding: 0.3rem 0.5rem; max-width: 100%; color: var(--fg); background: var(--bg); }
+input[type="radio"] { width: 24px; height: 24px; min-width: 24px; min-height: 24px; margin: 0 0.5rem 0 0; vertical-align: middle; }
+label { display: block; font-weight: 600; margin-top: 0.75rem; }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; align-items: center; }
+.panel { border: 2px solid var(--line); border-radius: 6px; padding: 0.75rem 1rem; margin: 1rem 0; }
+.panel.bad { border-color: var(--bad); }
+.panel.bad .panel-title { color: var(--bad); }
+.panel.warn { border-color: var(--warn-fg); background: var(--warn-bg); color: var(--warn-fg); }
+.panel-title { font-weight: 700; margin: 0 0 0.25rem; display: flex; gap: 0.4rem; align-items: center; }
+.field-msg { color: var(--bad); font-weight: 600; margin: 0.25rem 0 0; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+td.num, th.num { text-align: right; }
+fieldset { border: 2px solid var(--line); border-radius: 6px; margin: 1rem 0; padding: 0.5rem 1rem 1rem; min-width: 0; }
+.parties { padding-left: 1.2rem; }
+#gpay-area { padding: 8px; margin: 1rem 0; }
+#gpay-container { min-width: 240px; max-width: 100%; height: 48px; }
+@media (max-width: 300px) { #gpay-container { min-width: 0; } }
+.badge { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; font-weight: 700;
+  padding: 0.05rem 0.4rem; border-radius: 3px; border: 1px solid currentColor; }
+.badge.live { color: #0a4f9e; } .badge.recorded { color: #5a2d82; } .badge.gpaytest { color: #0a6b2b; }
+.badge.simulated { color: #7a3d00; }
+/* UX-4.4.1 neutral tokens (spec 15.5 row 8): text #374151, border and icon #4B5563, fill #F3F4F6. */
+.badge.local { color: #374151; border-color: #4B5563; background: #F3F4F6; } .badge.local .icon { color: #4B5563; } .badge.notucp { color: #ffffff; background: #1a1a1a; border-color: #1a1a1a; }
+#msg-list { padding-left: 0; list-style: none; }
+#msg-list li { margin: 0.4rem 0; }
+#msg-list button { width: 100%; justify-content: flex-start; flex-wrap: wrap; text-align: left; }
+#msg-list button[aria-current="true"] { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+.phase { font-size: 0.8rem; color: var(--muted); }
+dl.keys dt { font-weight: 700; margin-top: 0.5rem; }
+/* UX-4.5.1: one rule for each code element. Same size as the text next to it (body size or larger),
+   same colour. Long names wrap at 320 CSS px (SC 1.4.10). No background, so no new contrast pair. */
+code { font-family: var(--font-family-code); font-size: 1em; color: inherit; overflow-wrap: anywhere; word-break: break-word; }
+dl.keys dd { margin: 0 0 0 0.75rem; }
+.explain { color: var(--muted); display: block; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f3f3; color: var(--fg); padding: 0.5rem; border-radius: 4px; max-width: 100%; }
+summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.muted { color: var(--muted); }
+#links a, #export, #continue-url { display: inline-flex; align-items: center; min-height: 44px; }
+.panel.declined { border-color: #7a3d00; border-left-width: 6px; background: #fff7ed; color: #1a1a1a; }
+.panel.declined .panel-title { color: #7a3d00; font-size: 1.15rem; margin-top: 0; }
+.panel.declined .panel-title:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+.note { color: var(--fg); border-left: 3px solid var(--line); padding-left: 0.5rem; }
+
+/* S7 (UX-4.2a): SC2a and the product detail. [hidden] must win over the display of buttons and flex rows. */
+[hidden] { display: none !important; }
+#search-form { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; max-width: 100%; }
+#search-form input { width: 100%; max-width: 32rem; }
+#search-form p { margin: 0; }
+.hint { font-size: 0.95rem; }
+ul.cards { list-style: none; padding: 0; margin: 0.5rem 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr)); gap: 0.75rem; }
+.card { border: 2px solid var(--line); border-radius: 6px; padding: 0.75rem; min-width: 0; }
+.card h4 { margin: 0.25rem 0; font-size: 1.05rem; }
+.card p { margin: 0.15rem 0; }
+.thumb { display: block; max-width: 100%; max-height: 8rem; height: auto; }
+.price { font-weight: 700; }
+.notes ul { padding-left: 1.2rem; }
+#msg-list .pending { display: flex; flex-wrap: wrap; gap: 0.25rem 0.5rem; align-items: center; padding: 0.5rem 1rem; border: 2px dashed var(--line); border-radius: 4px; }
+.row-state { font-weight: 700; font-size: 0.85rem; }

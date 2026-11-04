@@ -1,0 +1,31 @@
+{
+  "id": "gpay_demo_test_01",
+  "version": "2026-01-23",
+  "spec": "https://pay.google.com/gp/p/ucp/2026-01-23/",
+  "schema": "https://pay.google.com/gp/p/ucp/2026-01-23/schemas/config.json",
+  "config": {
+    "api_version": 2,
+    "api_version_minor": 0,
+    "environment": "TEST",
+    "merchant_info": {
+      "merchant_name": "UCP Demo Shop (TEST)",
+      "merchant_id": "TEST"
+    },
+    "allowed_payment_methods": [
+      {
+        "type": "CARD",
+        "parameters": {
+          "allowed_auth_methods": ["PAN_ONLY"],
+          "allowed_card_networks": ["AMEX", "DISCOVER", "MASTERCARD", "VISA"]
+        },
+        "tokenization_specification": {
+          "type": "PAYMENT_GATEWAY",
+          "parameters": {
+            "gateway": "example",
+            "gatewayMerchantId": "exampleGatewayMerchantId"
+          }
+        }
+      }
+    ]
+  }
+}

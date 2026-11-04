@@ -1,0 +1,24 @@
+# Local TLS 1.3 reverse proxy (T-90, NFR-01, AC-121). Loopback only (DM-26).
+{
+	admin 127.0.0.1:{$CADDY_ADMIN_PORT:2019}
+	local_certs
+	skip_install_trust
+	auto_https disable_redirects
+	default_bind 127.0.0.1
+}
+
+https://localhost:{$PLATFORM_TLS_PORT:8443} {
+	bind 127.0.0.1
+	tls internal {
+		protocols tls1.3
+	}
+	reverse_proxy 127.0.0.1:{$PLATFORM_APP_PORT:8101}
+}
+
+https://localhost:{$BUSINESS_TLS_PORT:9443} {
+	bind 127.0.0.1
+	tls internal {
+		protocols tls1.3
+	}
+	reverse_proxy 127.0.0.1:{$BUSINESS_APP_PORT:8201}
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pay.google.com/gp/p/ucp/2026-01-23/schemas/card_payment_instrument.json",
+  "title": "Google Pay Card Payment Instrument",
+  "description": "This object extends the Card Payment Instrument type with Google Pay tokenized payment credential data.",
+  "allOf": [
+    {
+      "$ref": "https://ucp.dev/2026-01-23/schemas/shopping/types/card_payment_instrument.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "display": {
+          "type": "object",
+          "required": [
+            "brand",
+            "last_digits"
+          ],
+          "properties": {
+            "brand": {
+              "type": "string",
+              "description": "The card network brand for this payment instrument.",
+              "enum": [
+                "AMEX",
+                "DISCOVER",
+                "ELECTRON",
+                "ELO",
+                "ELO_DEBIT",
+                "INTERAC",
+                "JCB",
+                "MAESTRO",
+                "MASTERCARD",
+                "VISA"
+              ]
+            }
+          }
+        },
+        "credential": {
+          "description": "Tokenization data for the selected payment method.",
+          "type": "object",
+          "required": [
+            "type",
+            "token"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "DIRECT",
+                "PAYMENT_GATEWAY"
+              ],
+              "description": "The type of tokenization to be applied to the selected payment method. This value matches the type set in tokenization_specification."
+            },
+            "token": {
+              "type": "string",
+              "description": "The generated payment method token."
+            }
+          }
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "id": "instrument_12345",
+      "handler_id": "handler_67890",
+      "type": "card",
+      "display": {
+        "brand": "VISA",
+        "last_digits": "1234"
+      },
+      "credential": {
+        "type": "PAYMENT_GATEWAY",
+        "token": "{\"signature\":\"MEQCIAEFAKESIGNATURE1234567890abcdefghijklmnopqrstuvwxyz\\u003d\\u003d\",\"intermediateSigningKey\":{\"signedKey\":\"{\\\"keyValue\\\":\\\"MFFAKEKEYVALUE1234567890abcdefghijklmnopqrstuvwxyz\\u003d\\\",\\\"keyExpiration\\\":\\\"1772320017000\\\"}\",\"signatures\":[\"SKZFAKESIGNATURE1234567890abcdefghijklmnopqrstuvwxyz\\u003d\\u003d\"]},\"protocolVersion\":\"ECv2\",\"signedMessage\":\"{\\\"encryptedMessage\\\":\\\"FAKEENCRYPTEDMESSAGE1234567890abcdefghijklmnopqrstuvwxyz\\\",\\\"ephemeralPublicKey\\\":\\\"BCFAKEPUBLICKEY1234567890abcdefghijklmnopqrstuvwxyz\\u003d\\\",\\\"tag\\\":\\\"FAKETAG1234567890abcdefghijklmnopqrstuvwxyz\\u003d\\\"}\"}"
+      }
+    }
+  ]
+}

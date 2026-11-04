@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CI-only instrument of the mock payment handler (spec T-111)",
+  "description": "MODE=ci only. The instrument of handler_id mock_payment_handler: the pinned card payment instrument, with a credential that is the pinned token credential. This file adds no rule of its own.",
+  "allOf": [
+    {
+      "$ref": "https://ucp.dev/2026-04-08/schemas/shopping/types/card_payment_instrument.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "$ref": "https://ucp.dev/2026-04-08/schemas/shopping/types/token_credential.json"
+        }
+      }
+    }
+  ]
+}

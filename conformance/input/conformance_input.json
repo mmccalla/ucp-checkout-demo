@@ -1,0 +1,24 @@
+{
+  "ucp_version": "2026-04-08",
+  "required_capabilities": [
+    "dev.ucp.shopping.checkout",
+    "dev.ucp.shopping.order",
+    "dev.ucp.shopping.fulfillment"
+  ],
+  "currency": "USD",
+  "items": [
+    {
+      "id": "bouquet_roses",
+      "title": "Red Rose",
+      "price": 3500
+    }
+  ],
+  "out_of_stock_item": {
+    "id": "gardenias",
+    "title": "Gardenias"
+  },
+  "non_existent_item": {
+    "id": "pink_wumpus",
+    "title": "Pink Wumpus"
+  }
+}

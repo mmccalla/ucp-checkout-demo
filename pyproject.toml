@@ -1,0 +1,73 @@
+[project]
+name = "ucp-checkout-demo"
+version = "0.0.0"
+description = "UCP 2026-04-08 checkout demo with the com.google.pay handler (TEST only)"
+requires-python = "==3.12.*"
+dependencies = [
+  "fastapi==0.121.0",
+  "uvicorn==0.38.0",
+  "httpx==0.28.1",
+  "jsonschema[format-nongpl]==4.26.0",
+  "referencing==0.37.0",
+  "cryptography==50.0.2",
+  "ucp-sdk==0.4.6",
+  "sqlalchemy==2.0.55",
+  "aiosqlite==0.22.1",
+  "greenlet==3.5.6",
+  "absl-py==2.5.1",
+  "shortuuid==1.0.13",
+  "opentelemetry-api==1.45.1",
+  "opentelemetry-sdk==1.45.1",
+  "opentelemetry-exporter-otlp-proto-http==1.45.1",
+  "opentelemetry-instrumentation-fastapi==0.66b1",
+  "opentelemetry-instrumentation-httpx==0.66b1",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==8.4.2",
+  "ruff==0.14.3",
+  "playwright==1.56.0",
+  "mypy==1.18.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers -ra"
+xfail_strict = true
+testpaths = ["tests"]
+pythonpath = ["platform/backend/src", "business/src", "libs", "psp-mock/src", "conformance", "tools/latency"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# The vendored samples server keeps its upstream style (2-space indent). G1 checks it with
+# tools/gates/g1_vendored.py and a per-file baseline (spec T-103, ADR 0007).
+extend-exclude = ["business/src/ucp_sample_server"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["platform/backend/src", "business/src", "libs", "tools", "tests", "psp-mock/src", "conformance"]
+explicit_package_bases = true
+mypy_path = ["platform/backend/src", "business/src", "libs", "tools/gates", "psp-mock/src", "conformance", "tools/latency"]
+# The vendored samples server has its own baseline (spec T-103, ADR 0007).
+exclude = ["^business/src/ucp_sample_server/"]
+
+# jsonschema 4.26.0 ships no type information. The stub package would be a new dependency.
+# ADR 0002 records this override. It applies only to the jsonschema import.
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+
+# business_app imports the vendored sample modules by their top-level names (the sample puts
+# its folder on sys.path). mypy does not check them here (exclude above). ADR 0007.
+[[tool.mypy.overrides]]
+module = [
+  "config", "db", "exceptions", "ucp_signing", "generated_routes.*", "routes.*", "services.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+

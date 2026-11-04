@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UCP discovery panel</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+table { border-collapse: collapse; margin: 0.5rem 0 1rem; }
+th, td { border: 1px solid #888; padding: 0.3rem 0.6rem; text-align: left; vertical-align: top; }
+.bad { color: #a00000; font-weight: bold; }
+.ok { color: #006000; font-weight: bold; }
+.notice { border: 2px solid #a06000; padding: 0.5rem; }
+</style>
+</head>
+<body>
+<h1>UCP discovery panel</h1>
+<nav aria-label="Cases">
+  <a href="?case=live">live</a> | <a href="?case=malformed">malformed (AC-03)</a> |
+  <a href="?case=binding">binding (AC-05)</a> | <a href="?case=lookup-only">lookup only (AC-09)</a>
+</nav>
+<main id="out" aria-live="polite">Loading...</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const row = (k, v) => `<tr><th scope="row">${esc(k)}</th><td>${v}</td></tr>`;
+async function run() {
+  const c = new URLSearchParams(location.search).get("case") || "live";
+  const r = await (await fetch(`/api/discovery?case=${encodeURIComponent(c)}`)).json();
+  const out = document.getElementById("out");
+  let h = `<p>Case: <b>${esc(r.case)}</b>. Profile: ${esc(r.url)}</p>`;
+  if (!r.ok) {
+    const label = r.error === "profile_malformed" ? "profile malformed" : r.error;
+    out.innerHTML = h + `<p class="bad" role="alert">Discovery stopped: ${esc(label)}</p><pre>${esc(r.detail)}</pre>`;
+    return;
+  }
+  h += "<table>" + row("ucp.version", esc(r.ucp_version)) + row("selected version", esc(r.selected_version)) +
+    row("transport", esc(r.transport)) + row("endpoint", esc(r.endpoint)) +
+    row("services", esc(r.services.join(", "))) + row("resolved", esc((r.resolved || []).join(", "))) +
+    row("Cache-Control", esc(r.cache_control ? r.cache_control.detail : "")) + "</table>";
+  h += "<h2>Capabilities</h2><table><tr><th>Name</th><th>State</th></tr>" +
+    r.active.map((n) => `<tr><td>${esc(n)}</td><td class="ok">active</td></tr>`).join("") +
+    Object.entries(r.excluded).map(([n, why]) => `<tr><td>${esc(n)}</td><td class="bad">not active: ${esc(why)}</td></tr>`).join("") + "</table>";
+  if (r.search_notice) h += `<p class="notice" role="status">${esc(r.search_notice)}</p>`;
+  h += "<h2>Payment handlers</h2><table><tr><th>Handler</th><th>Environment</th><th>State</th></tr>" +
+    Object.entries(r.payment_handlers).map(([n, v]) =>
+      `<tr><td>${esc(n)}</td><td>${esc(v.environment)}</td><td class="${v.used ? "ok" : "bad"}">${v.used ? "used" : "not used: " + esc(v.reasons.join("; "))}</td></tr>`).join("") + "</table>";
+  out.innerHTML = h;
+}
+run().catch((e) => { document.getElementById("out").textContent = "Error: " + e; });
+</script>
+</body>
+</html>

@@ -1,0 +1,3062 @@
+#   Copyright 2026 UCP Authors
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+
+"""Integration tests for the UCP SDK Server."""
+
+import asyncio
+from collections.abc import AsyncGenerator
+import datetime
+import json
+from pathlib import Path
+import shutil
+import tempfile
+import uuid
+
+from urllib.parse import urlsplit
+
+from absl import flags
+from absl.testing import absltest
+import config
+import db
+import dependencies
+from fastapi.testclient import TestClient
+import httpx
+import respx
+import ucp_signing
+import webhook_signer
+from enums import ErrorSeverity, MessageType
+from exceptions import UcpErrorResponse, UcpMessageError
+from models import UnifiedCheckout
+from server.server import app
+from services.checkout_service import CheckoutService
+from services.fulfillment_service import FulfillmentService
+from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import delete
+from sqlalchemy.sql import select
+from ucp_sdk.models.schemas.shopping import (
+  checkout_create_request as checkout_create_req,
+)
+from ucp_sdk.models.schemas.shopping import (
+  payment_create_request as payment_create_req,
+)
+
+from ucp_sdk.models.schemas.shopping import (
+  checkout_complete_request as checkout_comp_req,
+  payment_complete_request as payment_comp_req,
+)
+from ucp_sdk.models.schemas.shopping.ap2_mandate import Checkout as Ap2Checkout
+from ucp_sdk.models.schemas.shopping.buyer_consent import (
+  Checkout as BuyerConsentCheckoutResp,
+)
+from ucp_sdk.models.schemas.shopping.discount import (
+  Checkout as DiscountCheckoutResp,
+)
+from ucp_sdk.models.schemas.shopping.fulfillment import (
+  Checkout as FulfillmentCheckout,
+)
+from ucp_sdk.models.schemas.shopping.order import Order
+from ucp_sdk.models.schemas.shopping.order import PlatformSchema
+from ucp_sdk.models.schemas.shopping.types import (
+  fulfillment_group_create_request as fulfillment_group_create_req,
+)
+from ucp_sdk.models.schemas.shopping.types import (
+  fulfillment_method_create_request as fulfillment_method_create_req,
+)
+from ucp_sdk.models.schemas.shopping.types import (
+  item_create_request as item_create_req,
+)
+from ucp_sdk.models.schemas.shopping.types import (
+  line_item_create_request as line_item_create_req,
+)
+from ucp_sdk.models.schemas.shopping.types import (
+  shipping_destination_create_request as shipping_destination_req,
+)
+
+FLAGS = flags.FLAGS
+
+
+def _find_nulls(node: object, path: str = "") -> list[str]:
+  """Return the JSON-pointer path of every explicit `null` in a decoded body.
+
+  The order schema types unset optional fields as bare non-nullable
+  string/object/array, so under JSON Schema 2020-12 an explicit `null` is a
+  distinct type and fails validation the way an omitted key does not. A
+  response must OMIT an unset optional field, never emit `null` for it.
+  `Order.model_validate` (used by every other order test in this file, e.g.
+  test_shipping_event_matches_order_schema and
+  test_webhook_delivers_the_bare_order_as_body) cannot see this defect: the
+  generated pydantic model types every one of these fields
+  `Optional[...] = None`, so it accepts a `null` the wire schema forbids.
+  """
+  paths: list[str] = []
+  if node is None:
+    return [path or "/"]
+  if isinstance(node, dict):
+    for key, value in node.items():
+      paths.extend(_find_nulls(value, f"{path}/{key}"))
+  elif isinstance(node, list):
+    for index, value in enumerate(node):
+      paths.extend(_find_nulls(value, f"{path}/{index}"))
+  return paths
+
+
+class TestCheckout(
+  BuyerConsentCheckoutResp,
+  FulfillmentCheckout,
+  DiscountCheckoutResp,
+  Ap2Checkout,
+):
+  """Checkout model supporting Fulfillment, Discount, and AP2 extensions."""
+
+  platform: PlatformSchema | None = None
+  cart_id: str | None = None
+
+
+class IntegrationTest(absltest.TestCase):
+  """Integration tests for the UCP server application."""
+
+  def setUp(self) -> None:
+    """Set up the test environment, including temporary DBs and dependencies."""
+    flags.FLAGS(["test"])
+    super().setUp()
+    # Create a temporary directory for test databases
+    self.test_dir = Path(tempfile.mkdtemp())
+    self.products_db = self.test_dir / "test_products.db"
+    self.transactions_db = self.test_dir / "test_transactions.db"
+
+    # Initialize local engines and session makers
+    prod_url = f"sqlite+aiosqlite:///{self.products_db}"
+    self.products_engine = create_async_engine(prod_url, echo=False)
+    self.products_session_factory = sessionmaker(
+      self.products_engine, expire_on_commit=False, class_=AsyncSession
+    )
+
+    trans_url = f"sqlite+aiosqlite:///{self.transactions_db}"
+    self.transactions_engine = create_async_engine(trans_url, echo=False)
+    self.transactions_session_factory = sessionmaker(
+      self.transactions_engine, expire_on_commit=False, class_=AsyncSession
+    )
+
+    # Initialize DB schemas locally
+    async def init_schemas() -> None:
+      async with self.products_engine.begin() as conn:
+        await conn.run_sync(db.ProductBase.metadata.create_all)
+      async with self.transactions_engine.begin() as conn:
+        await conn.run_sync(db.TransactionBase.metadata.create_all)
+
+    asyncio.run(init_schemas())
+
+    # Define dependency overrides
+    async def override_get_products_db() -> AsyncGenerator[AsyncSession, None]:
+      async with self.products_session_factory() as session:
+        yield session
+
+    async def override_get_transactions_db() -> AsyncGenerator[
+      AsyncSession, None
+    ]:
+      async with self.transactions_session_factory() as session:
+        yield session
+
+    # Apply overrides
+    app.dependency_overrides[dependencies.get_products_db] = (
+      override_get_products_db
+    )
+    app.dependency_overrides[dependencies.get_transactions_db] = (
+      override_get_transactions_db
+    )
+
+    # Initialize Client
+    self.client = TestClient(app)
+
+    self._seed_data()
+
+  def tearDown(self) -> None:
+    """Clean up the test environment."""
+    # Clear overrides
+    app.dependency_overrides.clear()
+
+    # Dispose engines
+    async def dispose_engines() -> None:
+      await self.products_engine.dispose()
+      await self.transactions_engine.dispose()
+
+    asyncio.run(dispose_engines())
+
+    shutil.rmtree(self.test_dir)
+    super().tearDown()
+
+  def get_resource_id(self, gid: str | None) -> str | None:
+    """Get the resource_id from a GID."""
+    if gid and gid.startswith("gid://"):
+      return gid.split("/")[-1]
+    return gid
+
+  def _seed_data(self) -> None:
+    """Seed initial test data synchronously."""
+    with self.client:
+      asyncio.run(self._async_seed())
+
+  async def _async_seed(self) -> None:
+    """Seed initial test data asynchronously."""
+    # Seed Products using local session maker
+    async with self.products_session_factory() as session:
+      await session.execute(delete(db.Product))
+      products = [
+        db.Product(
+          id="rose",
+          title="Red Rose",
+          price=1000,
+          image_url="http://rose.com",
+        ),
+        db.Product(
+          id="tulip",
+          title="White Tulip",
+          price=800,
+          image_url="http://tulip.com",
+        ),
+      ]
+      session.add_all(products)
+      await session.commit()
+
+    # Seed Inventory using local session maker
+    async with self.transactions_session_factory() as session:
+      await session.execute(delete(db.Inventory))
+      inventory = [
+        db.Inventory(product_id="rose", quantity=5),
+        db.Inventory(product_id="tulip", quantity=2),
+      ]
+      session.add_all(inventory)
+      await session.commit()
+
+  def _get_headers(
+    self,
+    idempotency_key: str | None = None,
+    request_id: str | None = None,
+    exclude: list[str] | None = None,
+  ) -> dict[str, str]:
+    """Construct request headers with optional overrides."""
+    headers = {
+      "UCP-Agent": 'profile="https://agent.example/profile"',
+      "request-signature": "test",
+      "idempotency-key": idempotency_key or str(uuid.uuid4()),
+      "request-id": request_id or str(uuid.uuid4()),
+    }
+    if exclude:
+      for key in exclude:
+        headers.pop(key, None)
+    return headers
+
+  def _create_checkout_payload(
+    self,
+    checkout_id: str,
+    items: list[tuple[str, str, int, int]],
+  ) -> checkout_create_req.CheckoutCreateRequest:
+    """Create a checkout payload using SDK models."""
+    line_items = []
+    for item_id, _item_title, _item_price, quantity in items:
+      item = item_create_req.ItemCreateRequest(id=item_id)
+      line_item = line_item_create_req.LineItemCreateRequest(
+        quantity=quantity, item=item
+      )
+      line_items.append(line_item)
+
+    payment = payment_create_req.PaymentCreateRequest(instruments=[])
+
+    # Hierarchical Fulfillment Construction
+    destination = shipping_destination_req.ShippingDestinationCreateRequest(
+      id="dest_1", address_country="US"
+    )
+    group = fulfillment_group_create_req.FulfillmentGroupCreateRequest(
+      id="group_1",
+      line_item_ids=[i_id for i_id, _, _, _ in items],
+      selected_option_id="std-ship",
+    )
+    method = fulfillment_method_create_req.FulfillmentMethodCreateRequest(
+      id="method_1",
+      line_item_ids=[i_id for i_id, _, _, _ in items],
+      type="shipping",
+      destinations=[destination],
+      selected_destination_id="dest_1",
+      groups=[group],
+    )
+    fulfillment = {
+      "methods": [
+        method.model_dump(mode="json", exclude_none=True, by_alias=True)
+      ]
+    }
+
+    return checkout_create_req.CheckoutCreateRequest(
+      id=checkout_id,
+      currency="USD",
+      line_items=line_items,
+      payment=payment,
+      fulfillment=fulfillment,
+    )
+
+  def _create_payment_payload(self) -> dict:
+    """Create a payment payload using SDK models."""
+    payload = checkout_comp_req.CheckoutCompleteRequest(
+      payment=payment_comp_req.PaymentCompleteRequest(
+        instruments=[
+          {
+            "id": "instr_1",
+            "handler_id": "mock_payment_handler",
+            "type": "card",
+            "display": {"brand": "Visa", "last_digits": "1234"},
+            "credential": {"type": "token", "token": "success_token"},
+          }
+        ]
+      ),
+    )
+    return payload.model_dump(mode="json", exclude_none=True)
+
+  def _perform_checkout_operation(
+    self,
+    operation: str,
+    checkout_id: str,
+    idempotency_key: str,
+    request_id: str,
+    request_body: dict | None,
+  ):
+    """Perform a checkout write operation for idempotency tests."""
+    headers = self._get_headers(
+      idempotency_key=idempotency_key,
+      request_id=request_id,
+    )
+    if operation == "update":
+      return self.client.put(
+        f"/checkout-sessions/{checkout_id}",
+        headers=headers,
+        json=request_body,
+      )
+    if operation == "complete":
+      return self.client.post(
+        f"/checkout-sessions/{checkout_id}/complete",
+        headers=headers,
+        json=request_body,
+      )
+    if operation == "cancel":
+      return self.client.post(
+        f"/checkout-sessions/{checkout_id}/cancel",
+        headers=headers,
+      )
+    raise ValueError(f"Unsupported checkout operation: {operation}")
+
+  def test_single_item_checkout(self) -> None:
+    """Test the full lifecycle of a single item checkout."""
+    with self.client:
+      # 1. Create Checkout
+      payload = self._create_checkout_payload(
+        "test_checkout_1", [("rose", "Red Rose", 1000, 2)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="1", request_id="1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      checkout = TestCheckout.model_validate(response.json())
+      # `id` is ucp_request: omit, so the server assigns it; follow-up
+      # operations use the returned id.
+      checkout_sid = self.get_resource_id(checkout.id)
+      self.assertIsInstance(checkout_sid, str)
+      self.assertEqual(checkout.status, "ready_for_complete")
+
+      # 2. Complete Checkout
+      payment_payload = self._create_payment_payload()
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="2", request_id="2"),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      checkout = TestCheckout.model_validate(response.json())
+      self.assertEqual(checkout.status, "completed")
+
+      # Verify DB State: Inventory Decremented
+      async def verify_inventory() -> int | None:
+        async with self.transactions_session_factory() as session:
+          qty = await db.get_inventory(session, "rose")
+          return qty
+
+      qty = asyncio.run(verify_inventory())
+      # Original 5 - 2 sold = 3 remaining
+      self.assertEqual(qty, 3, "Inventory should be decremented to 3")
+
+      # 3. Verify Inventory Deduction
+      # (Try to buy 4 more roses, only 3 should be left)
+      payload = self._create_checkout_payload(
+        "test_checkout_2", [("rose", "Red Rose", 1000, 4)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="3", request_id="3"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 400)
+      data = response.json()
+      self.assertEqual(data["ucp"]["status"], "error")
+      self.assertEqual(len(data["messages"]), 1)
+      self.assertIn("Insufficient stock", data["messages"][0]["content"])
+
+  def test_double_complete_checkout(self) -> None:
+    """Test that completing a checkout twice is idempotent."""
+    with self.client:
+      # 1. Create Checkout
+      payload = self._create_checkout_payload(
+        "test_checkout_double", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="1", request_id="1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      # 2. Complete Checkout (First time)
+      payment_payload = self._create_payment_payload()
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="2", request_id="2"),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 200)
+
+      # 3. Complete Checkout (Second time) - Should fail
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="4", request_id="4"),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 409)
+      data = response.json()
+      self.assertEqual(data["ucp"]["status"], "error")
+      self.assertEqual(len(data["messages"]), 1)
+      self.assertEqual(
+        data["messages"][0]["content"],
+        "Cannot complete checkout in state 'completed'",
+      )
+
+  def test_multi_instrument_complete_rejected(self) -> None:
+    """Multi-instrument complete is rejected with payment_failed.
+
+    Defensive-validation / newer-spec-alignment regression test (NOT a
+    2026-04-08 normative-violation test): the sample advertises UCP
+    2026-04-08 via ucp-sdk 0.4.6, and that release imposes no normative
+    instrument-cardinality rule — the Instrument Cardinality MUST was
+    introduced by spec PR #409 and first released in spec v2026-08-25.
+    The sample has no split-payments support and processes only
+    instruments[0], so a 200 "completed" on a two-instrument submission
+    silently discards the extra instrument(s), which a platform could
+    misread as "all instruments processed". The guard rejects with the
+    sample's existing payment-failure envelope (HTTP 402, code
+    payment_failed); failures leave no idempotency record, so the
+    operation stays retryable.
+    """
+
+    def two_instrument_payload(second_token: str) -> dict:
+      payload = checkout_comp_req.CheckoutCompleteRequest(
+        payment=payment_comp_req.PaymentCompleteRequest(
+          instruments=[
+            {
+              "id": "instr_1",
+              "handler_id": "mock_payment_handler",
+              "type": "card",
+              "display": {"brand": "Visa", "last_digits": "1234"},
+              "credential": {"type": "token", "token": "success_token"},
+            },
+            {
+              "id": "instr_2",
+              "handler_id": "mock_payment_handler",
+              "type": "card",
+              "display": {"brand": "Visa", "last_digits": "5678"},
+              "credential": {"type": "token", "token": second_token},
+            },
+          ]
+        ),
+        risk_signals={},
+      )
+      return payload.model_dump(mode="json", exclude_none=True)
+
+    with self.client:
+      # 1. Create checkout (rose x1; seeded inventory = 5).
+      payload = self._create_checkout_payload(
+        "test_multi_instrument", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="mi_k1", request_id="mi_r1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      checkout_sid = self.get_resource_id(response.json()["id"])
+      self.assertIsInstance(checkout_sid, str)
+
+      # 2a. success_token + success_token -> rejected.
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="mi_k2", request_id="mi_r2"),
+        json=two_instrument_payload("success_token"),
+      )
+      self.assertEqual(response.status_code, 402, f"Response: {response.text}")
+      body = response.json()
+      self.assertEqual(body["ucp"]["status"], "error")
+      self.assertEqual(body["messages"][0]["code"], "payment_failed")
+
+      # 2b. success_token + fail_token -> also rejected. The guard precedes
+      #     per-instrument evaluation, so the second token is never read.
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="mi_k3", request_id="mi_r3"),
+        json=two_instrument_payload("fail_token"),
+      )
+      self.assertEqual(response.status_code, 402, f"Response: {response.text}")
+      self.assertEqual(response.json()["messages"][0]["code"], "payment_failed")
+
+      # 3. No durable effects: checkout still completable.
+      response = self.client.get(
+        f"/checkout-sessions/{checkout_sid}",
+        headers=self._get_headers(idempotency_key="mi_k4", request_id="mi_r4"),
+      )
+      self.assertEqual(response.status_code, 200, f"Response: {response.text}")
+      self.assertEqual(
+        TestCheckout.model_validate(response.json()).status,
+        "ready_for_complete",
+      )
+
+      # 4. Inventory unchanged and no order persisted.
+      async def check_state() -> tuple[int | None, int]:
+        async with self.transactions_session_factory() as session:
+          qty = await db.get_inventory(session, "rose")
+          result = await session.execute(
+            select(func.count()).select_from(db.Order)
+          )
+          return qty, result.scalar_one()
+
+      qty, order_count = asyncio.run(check_state())
+      self.assertEqual(qty, 5, "Inventory must be unchanged after rejection")
+      self.assertEqual(order_count, 0, "No order may exist after rejection")
+
+      # 5. Failure is retryable: corrected single-instrument submission on a
+      #    fresh key completes normally (idempotency semantics preserved).
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="mi_k5", request_id="mi_r5"),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, f"Response: {response.text}")
+      self.assertEqual(
+        TestCheckout.model_validate(response.json()).status, "completed"
+      )
+
+  def test_complete_empty_instruments_still_invalid(self) -> None:
+    """The pre-existing empty-instruments guard is unchanged.
+
+    The len>1 guard sits after the empty check, so a submission with no
+    instruments still answers with the original INVALID_REQUEST error.
+    """
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_empty_instruments", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="ei_k1", request_id="ei_r1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      complete = checkout_comp_req.CheckoutCompleteRequest(
+        payment=payment_comp_req.PaymentCompleteRequest(instruments=[]),
+        risk_signals={},
+      )
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="ei_k2", request_id="ei_r2"),
+        json=complete.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 400, f"Response: {response.text}")
+      body = response.json()
+      self.assertEqual(body["ucp"]["status"], "error")
+      self.assertEqual(body["messages"][0]["code"], "INVALID_REQUEST")
+
+  def test_multi_item_checkout(self) -> None:
+    """Tests checking out multiple items with inventory validation."""
+    with self.client:
+      # 1. Create Multi-item Checkout
+      payload = self._create_checkout_payload(
+        "test_checkout_multi",
+        [("rose", "Red Rose", 1000, 1), ("tulip", "White Tulip", 800, 2)],
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="5", request_id="5"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      # 2. Complete Multi-item Checkout
+      payment_payload = self._create_payment_payload()
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="6", request_id="6"),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 200)
+
+      # Verify DB State for Multi-item
+      async def verify_multi_inventory() -> tuple[int | None, int | None]:
+        async with self.transactions_session_factory() as session:
+          qty_rose = await db.get_inventory(session, "rose")
+          qty_tulip = await db.get_inventory(session, "tulip")
+          return qty_rose, qty_tulip
+
+      qty_rose, qty_tulip = asyncio.run(verify_multi_inventory())
+      # 5 - 1 = 4
+      self.assertEqual(qty_rose, 4, "Rose inventory should be 4 (5 - 1)")
+      # 2 - 2 = 0
+      self.assertEqual(qty_tulip, 0, "Tulip inventory should be 0 (2 - 2)")
+
+  def test_shipping_event_matches_order_schema(self) -> None:
+    """Simulated shipping persists a schema-valid fulfillment event."""
+    with self.client:
+      payload = self._create_checkout_payload(
+        "shipping_event",
+        [
+          ("rose", "Red Rose", 1000, 2),
+          ("tulip", "White Tulip", 800, 1),
+        ],
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="shipping_event_1", request_id="shipping_event_1"
+        ),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(
+          idempotency_key="shipping_event_2", request_id="shipping_event_2"
+        ),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      order_id = response.json()["order"]["id"]
+
+      headers = self._get_headers()
+      headers["Simulation-Secret"] = FLAGS.simulation_secret
+      response = self.client.post(
+        f"/testing/simulate-shipping/{order_id}", headers=headers
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      response = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      order_data = response.json()
+      Order.model_validate(order_data)
+      event = order_data["fulfillment"]["events"][-1]
+      self.assertNotIn("timestamp", event)
+      self.assertEqual(event["type"], "shipped")
+      self.assertIn("occurred_at", event)
+      self.assertEqual(
+        event["line_items"],
+        [
+          {
+            "id": line_item["id"],
+            "quantity": line_item["quantity"]["total"],
+          }
+          for line_item in order_data["line_items"]
+        ],
+      )
+
+  def _ship_test_order(
+    self, tag: str, items: list[tuple[str, str, int, int]]
+  ) -> str:
+    """Create a checkout and complete it; return the order id."""
+    payload = self._create_checkout_payload(tag, items)
+    response = self.client.post(
+      "/checkout-sessions",
+      headers=self._get_headers(
+        idempotency_key=f"{tag}_1", request_id=f"{tag}_1"
+      ),
+      json=payload.model_dump(mode="json", exclude_none=True),
+    )
+    self.assertEqual(response.status_code, 201, response.text)
+    checkout_sid = self.get_resource_id(response.json()["id"])
+    response = self.client.post(
+      f"/checkout-sessions/{checkout_sid}/complete",
+      headers=self._get_headers(
+        idempotency_key=f"{tag}_2", request_id=f"{tag}_2"
+      ),
+      json=self._create_payment_payload(),
+    )
+    self.assertEqual(response.status_code, 200, response.text)
+    return response.json()["order"]["id"]
+
+  def _simulate_shipping(self, order_id: str):
+    """Call the secret-gated shipping simulation hook."""
+    headers = self._get_headers()
+    headers["Simulation-Secret"] = FLAGS.simulation_secret
+    return self.client.post(
+      f"/testing/simulate-shipping/{order_id}", headers=headers
+    )
+
+  def _fetch_order(self, order_id: str) -> dict:
+    """GET an order and validate it against the Order model."""
+    response = self.client.get(
+      f"/orders/{order_id}", headers=self._get_headers()
+    )
+    self.assertEqual(response.status_code, 200, response.text)
+    order_data = response.json()
+    Order.model_validate(order_data)
+    return order_data
+
+  def test_simulate_shipping_fresh_order_ships_all_remaining(self) -> None:
+    """Fresh order: the shipped event matches the counter increments.
+
+    Simulator policy (not a 2026-04-08 requirement): one simulation call
+    ships all remaining units, so the event's per-line quantities are
+    exactly the `fulfilled` increments. The stored order must stay
+    self-consistent with its own event log.
+    """
+    with self.client:
+      order_id = self._ship_test_order(
+        "ship_fresh",
+        [("rose", "Red Rose", 1000, 2), ("tulip", "White Tulip", 800, 1)],
+      )
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+
+      order_data = self._fetch_order(order_id)
+      events = order_data["fulfillment"]["events"]
+      self.assertEqual(len(events), 1)
+      event = events[0]
+      self.assertEqual(event["type"], "shipped")
+      event_qty = {e["id"]: e["quantity"] for e in event["line_items"]}
+      for line_item in order_data["line_items"]:
+        total = line_item["quantity"]["total"]
+        # Event quantity equals the counter increment for this call.
+        self.assertEqual(event_qty[line_item["id"]], total)
+        self.assertEqual(line_item["quantity"]["fulfilled"], total)
+        self.assertEqual(line_item["status"], "fulfilled")
+
+  def test_simulate_shipping_partial_fulfillment_ships_remaining(
+    self,
+  ) -> None:
+    """Prior partial fulfillment: only the remaining units are shipped.
+
+    With 2 of 5 already fulfilled, the simulation must emit a shipment of
+    3 (not 5) and set the counter to 2 + 3 = 5. Emitting the full total
+    again would double-count the already-fulfilled units.
+    """
+    with self.client:
+      order_id = self._ship_test_order(
+        "ship_partial", [("rose", "Red Rose", 1000, 5)]
+      )
+      order_data = self._fetch_order(order_id)
+      line_item = order_data["line_items"][0]
+      line_item["quantity"]["fulfilled"] = 2
+      response = self.client.put(
+        f"/orders/{order_id}",
+        headers=self._get_headers(),
+        json=order_data,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+
+      order_data = self._fetch_order(order_id)
+      line_item = order_data["line_items"][0]
+      event = order_data["fulfillment"]["events"][-1]
+      self.assertEqual(
+        event["line_items"], [{"id": line_item["id"], "quantity": 3}]
+      )
+      self.assertEqual(line_item["quantity"]["fulfilled"], 5)
+      self.assertEqual(line_item["status"], "fulfilled")
+
+  def test_simulate_shipping_repeat_call_appends_no_new_quantities(
+    self,
+  ) -> None:
+    """Repeated call with nothing remaining: no new shipment quantities.
+
+    The second call appends no event recording the full total again
+    (5 + 5 for a total of 5) and changes no counter. Status normalization
+    persists only if something actually changed — here nothing does, so
+    the stored order is untouched. Repeated calls never invent shipment
+    quantities.
+    """
+    with self.client:
+      order_id = self._ship_test_order(
+        "ship_repeat", [("rose", "Red Rose", 1000, 2)]
+      )
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+      first = self._fetch_order(order_id)
+      self.assertEqual(len(first["fulfillment"]["events"]), 1)
+
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+      second = self._fetch_order(order_id)
+      self.assertEqual(
+        len(second["fulfillment"]["events"]),
+        1,
+        "repeat simulation must not append another shipment event",
+      )
+      self.assertEqual(
+        second["fulfillment"]["events"], first["fulfillment"]["events"]
+      )
+      for line_item in second["line_items"]:
+        self.assertEqual(
+          line_item["quantity"]["fulfilled"],
+          line_item["quantity"]["total"],
+        )
+
+  def test_simulate_shipping_excludes_zero_total_lines(self) -> None:
+    """Zero-total (removed) lines are excluded from the shipment event.
+
+    The 2026-04-08 `fulfillment_event.json` schema requires each event
+    quantity >= 1, so a zero-remaining line must not appear in the event.
+    It is recorded as `removed` on the stored order instead.
+    """
+    with self.client:
+      order_id = self._ship_test_order(
+        "ship_mixed",
+        [("rose", "Red Rose", 1000, 2), ("tulip", "White Tulip", 800, 1)],
+      )
+      order_data = self._fetch_order(order_id)
+      for line_item in order_data["line_items"]:
+        if line_item["quantity"]["total"] == 1:
+          line_item["quantity"]["total"] = 0
+      response = self.client.put(
+        f"/orders/{order_id}",
+        headers=self._get_headers(),
+        json=order_data,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+
+      order_data = self._fetch_order(order_id)
+      event = order_data["fulfillment"]["events"][-1]
+      self.assertEqual(event["type"], "shipped")
+      # Only the active line ships; every event quantity is >= 1.
+      self.assertEqual(len(event["line_items"]), 1)
+      self.assertEqual(event["line_items"][0]["quantity"], 2)
+      for entry in event["line_items"]:
+        self.assertGreaterEqual(entry["quantity"], 1)
+      statuses = {
+        line_item["quantity"]["total"]: line_item["status"]
+        for line_item in order_data["line_items"]
+      }
+      self.assertEqual(statuses[2], "fulfilled")
+      self.assertEqual(statuses[0], "removed")
+
+  def test_simulate_shipping_all_zero_total_normalizes_removed(self) -> None:
+    """All lines zero-total: no shipment event, statuses normalized.
+
+    Nothing can ship (the schema forbids quantity 0 in a shipment event),
+    so no event is appended — but the stored order must still record the
+    zero-total lines as `removed` rather than leaving them `processing`.
+    """
+    with self.client:
+      order_id = self._ship_test_order(
+        "ship_allzero",
+        [("rose", "Red Rose", 1000, 2), ("tulip", "White Tulip", 800, 1)],
+      )
+      order_data = self._fetch_order(order_id)
+      for line_item in order_data["line_items"]:
+        line_item["quantity"]["total"] = 0
+      response = self.client.put(
+        f"/orders/{order_id}",
+        headers=self._get_headers(),
+        json=order_data,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      response = self._simulate_shipping(order_id)
+      self.assertEqual(response.status_code, 200, response.text)
+
+      order_data = self._fetch_order(order_id)
+      self.assertEqual(
+        order_data["fulfillment"]["events"],
+        [],
+        "no shipment event may be emitted when nothing can ship",
+      )
+      for line_item in order_data["line_items"]:
+        self.assertEqual(line_item["status"], "removed")
+
+  def test_get_order_omits_unset_optional_fields_as_null(self) -> None:
+    """GET /orders/{id} must omit unset optional fields, never emit null.
+
+    Mirrors #115/#117 (checkout responses null-padded unset optional
+    fields against the 2026-01-23 schema): the order route has the same
+    defect. Validated separately against the official ucp-schema validator
+    and an independent jsonschema referee, both spec corpora (2026-04-08,
+    2026-08-25); this in-repo test pins the narrower, dependency-free
+    signature -- no `null` anywhere in the response body.
+    """
+    with self.client:
+      payload = self._create_checkout_payload(
+        "order_get_nulls",
+        [("rose", "Red Rose", 1000, 2), ("tulip", "White Tulip", 800, 1)],
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="ogn1", request_id="ogn1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="ogn2", request_id="ogn2"),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      order_id = response.json()["order"]["id"]
+
+      response = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      null_paths = _find_nulls(response.json())
+      self.assertEqual(
+        null_paths,
+        [],
+        "order GET must omit unset optional fields, not emit null for them",
+      )
+
+  def test_update_order_omits_unset_optional_fields_as_null(self) -> None:
+    """PUT /orders/{id} must not write null-padded fields back to storage.
+
+    Companion to test_get_order_omits_unset_optional_fields_as_null: a fix
+    scoped only to the order's initial persist (inside complete_checkout)
+    would leave this update path free to reintroduce nulls on the very
+    next PUT -- the create/update-path split this suite exists to catch
+    (the shape of conformance#59 upstream: an issue named three sites, a
+    maintainer found the fourth of the same class).
+    """
+    with self.client:
+      payload = self._create_checkout_payload(
+        "order_put_nulls", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="opn1", request_id="opn1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="opn2", request_id="opn2"),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      order_id = response.json()["order"]["id"]
+
+      # Round-trip the order body through PUT unchanged (a real client
+      # updating one field would carry the rest of the order along, since
+      # the route is typed to accept a whole UnifiedOrder).
+      order_body = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      ).json()
+
+      response = self.client.put(
+        f"/orders/{order_id}",
+        headers=self._get_headers(idempotency_key="opn3", request_id="opn3"),
+        json=order_body,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      null_paths = _find_nulls(response.json())
+      self.assertEqual(
+        null_paths,
+        [],
+        "order PUT response must omit unset optional fields, not emit "
+        "null for them",
+      )
+
+      # And the stored copy the next GET serves must stay null-free too.
+      response = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      )
+      null_paths = _find_nulls(response.json())
+      self.assertEqual(
+        null_paths,
+        [],
+        "order PUT must not write null-padded fields back to storage",
+      )
+
+  def test_order_webhook_receiver_omits_unset_optional_fields_as_null(
+    self,
+  ) -> None:
+    """The order-event webhook receiver must not write nulls to storage.
+
+    A third site of the same class: `routes/ucp_implementation.py`'s
+    order_event_webhook parses an inbound partner Order payload and
+    persists `payload.model_dump(...)` directly. A partner naturally omits
+    unset optional fields; pydantic parses those as None, and dumping
+    without exclude_none writes them back as explicit null -- corrupting
+    storage the same way the create and update paths did, but reachable
+    without ever calling GET or PUT /orders/{id} first.
+    """
+    with self.client:
+      payload = self._create_checkout_payload(
+        "order_webhook_nulls", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="own1", request_id="own1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="own2", request_id="own2"),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      order_id = response.json()["order"]["id"]
+
+      # A partner's own event payload: only the fields it actually knows
+      # about, exactly as a real notifier would send it (the just-created,
+      # already null-free order body is the fixture: it naturally omits
+      # every unset optional field, so pydantic parses them as None on the
+      # way in).
+      order_body = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      ).json()
+
+      response = self.client.post(
+        "/webhooks/partners/partner_1/events/order",
+        headers=self._get_headers(),
+        json=order_body,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      stored = self.client.get(
+        f"/orders/{order_id}", headers=self._get_headers()
+      ).json()
+      null_paths = _find_nulls(stored)
+      self.assertEqual(
+        null_paths,
+        [],
+        "the order-event webhook receiver must not write null-padded "
+        "fields back to storage",
+      )
+
+  def test_missing_ucp_agent_header(self) -> None:
+    """Tests that requests missing mandatory headers are rejected."""
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_checkout_missing_header", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="7", request_id="7", exclude=["UCP-Agent"]
+        ),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      # Missing header should result in 422 Unprocessable Entity (FastAPI
+      # default validation)
+      self.assertEqual(response.status_code, 422)
+
+  def test_discount_code_matches_case_insensitively(self) -> None:
+    """Codes are matched case-insensitively by business (discount.md)."""
+
+    async def seed_discount() -> None:
+      async with self.transactions_session_factory() as session:
+        await session.execute(delete(db.Discount))
+        session.add(
+          db.Discount(
+            code="10OFF", type="percentage", value=10, description="10% Off"
+          )
+        )
+        await session.commit()
+
+    asyncio.run(seed_discount())
+
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_checkout_discount_ci", [("rose", "Red Rose", 1000, 1)]
+      )
+      body = payload.model_dump(mode="json", exclude_none=True)
+      # The seeded code is 10OFF; submit it lowercase on purpose.
+      body["discounts"] = {"codes": ["10off"]}
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="dci-1", request_id="dci-1"),
+        json=body,
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      data = response.json()
+      applied = (data.get("discounts") or {}).get("applied") or []
+      self.assertEqual(
+        [a["code"] for a in applied],
+        ["10OFF"],
+        "a lowercase code must match the seeded uppercase code",
+      )
+      discount_totals = [
+        t["amount"] for t in data.get("totals", []) if t["type"] == "discount"
+      ]
+      self.assertEqual(discount_totals, [-100], "10% of the 1000 subtotal")
+
+  def test_discount_total_is_negative_and_receipt_reconciles(self) -> None:
+    """A discount totals[] entry is negative and the receipt sums to total.
+
+    Per discount.md, applied[].amount is the magnitude (always positive) while
+    the corresponding totals[] entry is its signed effect on the receipt
+    (negative for discounts); total.json constrains discount/items_discount
+    amounts with exclusiveMaximum: 0. The subtotal plus the (negative) discount
+    must therefore reconcile to the total.
+    """
+
+    async def seed_discount() -> None:
+      async with self.transactions_session_factory() as session:
+        await session.execute(delete(db.Discount))
+        session.add(
+          db.Discount(
+            code="10OFF", type="percentage", value=10, description="10% Off"
+          )
+        )
+        await session.commit()
+
+    asyncio.run(seed_discount())
+
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_checkout_discount_sign", [("rose", "Red Rose", 1000, 1)]
+      )
+      body = payload.model_dump(mode="json", exclude_none=True)
+      body["discounts"] = {"codes": ["10OFF"]}
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="ds-1", request_id="ds-1"),
+        json=body,
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      data = response.json()
+      totals = {t["type"]: t["amount"] for t in data.get("totals", [])}
+
+      # 1. The discount totals[] entry is strictly negative (total.json
+      #    exclusiveMaximum: 0).
+      self.assertLess(
+        totals["discount"], 0, "discount totals[] entry must be negative"
+      )
+      # 2. applied[].amount stays positive (the magnitude, per discount.md).
+      applied = (data.get("discounts") or {}).get("applied") or []
+      self.assertTrue(
+        applied and all(a["amount"] > 0 for a in applied),
+        "applied[].amount is the positive magnitude",
+      )
+      # 3. The receipt reconciles: subtotal + discount == total.
+      self.assertEqual(
+        totals["subtotal"] + totals["discount"],
+        totals["total"],
+        "subtotal plus the signed discount must equal the total",
+      )
+
+  def test_discount_applied_is_not_duplicated_on_update(self) -> None:
+    """An update that omits discounts must not duplicate discounts.applied.
+
+    _recalculate_totals rebuilds checkout.totals from scratch on every
+    create/update, but it appended to discounts.applied without first
+    resetting it. Because the persisted (and reloaded) checkout already
+    carries the applied entries from the previous response, an update that
+    does not re-submit the discounts field accumulated a duplicate applied
+    entry on every call. The server is the authority for applied discounts
+    (discount.json marks applied as ucp_request:"omit"), so the list must be
+    rebuilt idempotently, mirroring how totals is rebuilt.
+    """
+
+    async def seed_discount() -> None:
+      async with self.transactions_session_factory() as session:
+        await session.execute(delete(db.Discount))
+        session.add(
+          db.Discount(
+            code="10OFF", type="percentage", value=10, description="10% Off"
+          )
+        )
+        await session.commit()
+
+    asyncio.run(seed_discount())
+
+    with self.client:
+      checkout_id = "test_checkout_discount_dup"
+      # 1. Create with a discount code -> applied has exactly one entry.
+      payload = self._create_checkout_payload(
+        checkout_id, [("rose", "Red Rose", 1000, 1)]
+      )
+      body = payload.model_dump(mode="json", exclude_none=True)
+      body["discounts"] = {"codes": ["10OFF"]}
+      create = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="dup-1", request_id="dup-1"),
+        json=body,
+      )
+      self.assertEqual(create.status_code, 201, f"Response: {create.text}")
+      checkout_id = self.get_resource_id(create.json()["id"])
+      applied = (create.json().get("discounts") or {}).get("applied") or []
+      self.assertEqual(len(applied), 1, "create applies the discount once")
+
+      # 2. Update without re-submitting discounts (e.g. a quantity/address
+      #    change). applied must remain a single entry, not accumulate.
+      update_body = payload.model_dump(mode="json", exclude_none=True)
+      update = self.client.put(
+        f"/checkout-sessions/{checkout_id}",
+        headers=self._get_headers(idempotency_key="dup-2", request_id="dup-2"),
+        json=update_body,
+      )
+      self.assertEqual(update.status_code, 200, f"Response: {update.text}")
+      applied_after = (update.json().get("discounts") or {}).get(
+        "applied"
+      ) or []
+      self.assertEqual(
+        [a["code"] for a in applied_after],
+        ["10OFF"],
+        "the previously applied discount is retained",
+      )
+      self.assertEqual(
+        len(applied_after),
+        1,
+        "update must not duplicate discounts.applied entries",
+      )
+
+      # 3. The receipt is still correct after the update: exactly one
+      #    negative discount totals[] entry, and subtotal + discount == total
+      #    (proves the totals rebuild and the applied rebuild stay in sync).
+      totals_by_type: dict[str, int] = {}
+      discount_total_entries = 0
+      for t in update.json().get("totals", []):
+        totals_by_type[t["type"]] = t["amount"]
+        if t["type"] == "discount":
+          discount_total_entries += 1
+      self.assertEqual(discount_total_entries, 1, "one discount totals[] entry")
+      self.assertEqual(
+        totals_by_type.get("discount"), -100, "10% of the 1000 subtotal"
+      )
+      self.assertEqual(
+        totals_by_type.get("subtotal") + totals_by_type.get("discount"),
+        totals_by_type.get("total"),
+        "subtotal plus the signed discount must equal the total",
+      )
+
+  def test_cancel_checkout(self) -> None:
+    """Tests the checkout cancellation flow."""
+    with self.client:
+      # 1. Create Checkout
+      payload = self._create_checkout_payload(
+        "test_checkout_cancel", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="cancel_1", request_id="cancel_1"
+        ),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      # 2. Cancel Checkout
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/cancel",
+        headers=self._get_headers(
+          idempotency_key="cancel_2", request_id="cancel_2"
+        ),
+      )
+      self.assertEqual(response.status_code, 200)
+      checkout = TestCheckout.model_validate(response.json())
+      self.assertEqual(checkout.status, "canceled")
+
+      # 3. Try to Cancel again (should fail)
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/cancel",
+        headers=self._get_headers(
+          idempotency_key="cancel_3", request_id="cancel_3"
+        ),
+      )
+      self.assertEqual(response.status_code, 409)
+      data = response.json()
+      self.assertEqual(data["ucp"]["status"], "error")
+      self.assertEqual(len(data["messages"]), 1)
+      self.assertIn("Cannot cancel checkout", data["messages"][0]["content"])
+
+      # 4. Create another checkout and complete it, then try to cancel
+      payload = self._create_checkout_payload(
+        "test_checkout_cancel_completed", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="cancel_4", request_id="cancel_4"
+        ),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201)
+      completed_sid = self.get_resource_id(response.json()["id"])
+
+      # Complete it
+      payment_payload = self._create_payment_payload()
+      response = self.client.post(
+        f"/checkout-sessions/{completed_sid}/complete",
+        headers=self._get_headers(
+          idempotency_key="cancel_5", request_id="cancel_5"
+        ),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 200)
+
+      # Try to cancel completed checkout
+      response = self.client.post(
+        f"/checkout-sessions/{completed_sid}/cancel",
+        headers=self._get_headers(
+          idempotency_key="cancel_6", request_id="cancel_6"
+        ),
+      )
+      self.assertEqual(response.status_code, 409)
+      data = response.json()
+      self.assertEqual(data["ucp"]["status"], "error")
+      self.assertEqual(len(data["messages"]), 1)
+      self.assertIn("Cannot cancel checkout", data["messages"][0]["content"])
+
+  def test_idempotency_key_is_scoped_to_operation_and_checkout(self) -> None:
+    """An idempotency key only replays the exact same checkout operation."""
+    with self.client:
+      for operation in ("update", "complete", "cancel"):
+        with self.subTest(operation=operation):
+          # The server assigns the checkout ids; the labels only scope the
+          # idempotency keys of the create calls.
+          server_ids: dict[str, str] = {}
+          for label in ("first", "second"):
+            payload = self._create_checkout_payload(
+              f"idempotency_{operation}_{label}",
+              [("rose", "Red Rose", 1000, 1)],
+            )
+            response = self.client.post(
+              "/checkout-sessions",
+              headers=self._get_headers(
+                idempotency_key=f"create_idempotency_{operation}_{label}",
+                request_id=f"create_idempotency_{operation}_{label}",
+              ),
+              json=payload.model_dump(mode="json", exclude_none=True),
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            server_ids[label] = self.get_resource_id(response.json()["id"])
+          first_checkout_id = server_ids["first"]
+          second_checkout_id = server_ids["second"]
+
+          shared_key = f"shared_{operation}_key"
+          request_body = None
+          if operation == "update":
+            request_body = {
+              "line_items": [
+                {
+                  "id": "shared_line_item",
+                  "quantity": 2,
+                  "item": {"id": "rose"},
+                }
+              ]
+            }
+          elif operation == "complete":
+            request_body = self._create_payment_payload()
+
+          first_response = self._perform_checkout_operation(
+            operation,
+            first_checkout_id,
+            shared_key,
+            f"{operation}_first",
+            request_body,
+          )
+          self.assertEqual(first_response.status_code, 200, first_response.text)
+
+          replay_response = self._perform_checkout_operation(
+            operation,
+            first_checkout_id,
+            shared_key,
+            f"{operation}_replay",
+            request_body,
+          )
+          self.assertEqual(
+            replay_response.status_code, 200, replay_response.text
+          )
+          self.assertEqual(replay_response.json(), first_response.json())
+
+          conflict_response = self._perform_checkout_operation(
+            operation,
+            second_checkout_id,
+            shared_key,
+            f"{operation}_second",
+            request_body,
+          )
+          self.assertEqual(
+            conflict_response.status_code, 409, conflict_response.text
+          )
+          self.assertEqual(
+            conflict_response.json()["messages"][0]["code"],
+            "IDEMPOTENCY_CONFLICT",
+          )
+
+          second_checkout = self.client.get(
+            f"/checkout-sessions/{second_checkout_id}",
+            headers=self._get_headers(
+              idempotency_key=f"get_{second_checkout_id}",
+              request_id=f"get_{second_checkout_id}",
+            ),
+          )
+          self.assertEqual(
+            second_checkout.status_code, 200, second_checkout.text
+          )
+          second_checkout_data = second_checkout.json()
+          self.assertEqual(second_checkout_data["status"], "ready_for_complete")
+          self.assertEqual(second_checkout_data["line_items"][0]["quantity"], 1)
+
+  def _notify_and_capture(
+    self,
+    checkout: UnifiedCheckout,
+    event_type: str,
+    respond: list | None = None,
+  ) -> list[dict]:
+    """Fire _notify_webhook with httpx stubbed and return captured POSTs.
+
+    ``respond`` optionally scripts the receiver, one entry per delivery
+    attempt: an int becomes that HTTP status, an Exception instance is
+    raised as a transport failure. Defaults to a single 200.
+    """
+    captured: list[dict] = []
+
+    async def run() -> None:
+      async with (
+        self.products_session_factory() as products_session,
+        self.transactions_session_factory() as transactions_session,
+      ):
+        service = CheckoutService(
+          FulfillmentService(),
+          products_session,
+          transactions_session,
+          "http://testserver",
+        )
+        with respx.mock:
+          if respond is None:
+            route = respx.post().respond(200)
+          else:
+            route = respx.post().mock(
+              side_effect=[
+                r if isinstance(r, Exception) else httpx.Response(r)
+                for r in respond
+              ]
+            )
+          await service._notify_webhook(checkout, event_type)
+          if route.called:
+            for call in route.calls:
+              request = call.request
+              body = json.loads(request.content) if request.content else None
+              captured.append(
+                {
+                  "url": str(request.url),
+                  "json": body,
+                  "content": request.content,
+                  "headers": request.headers,
+                }
+              )
+
+    asyncio.run(run())
+    return captured
+
+  def test_webhook_delivers_the_bare_order_as_body(self) -> None:
+    """The order-event webhook body is the order object, per rest.openapi.json.
+
+    webhooks.orderEvent.post.requestBody references #/components/schemas/order,
+    so the delivered JSON must be the order itself (every required top-level
+    field present) with the event type carried in the X-Event-Type header --
+    never a custom {event_type, checkout_id, order} envelope.
+    """
+    with self.client:
+      # Drive a real create + complete so the server persists a real order.
+      payload = self._create_checkout_payload(
+        "wh_order_placed", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="wh1", request_id="wh1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      checkout_sid = self.get_resource_id(response.json()["id"])
+
+      payment_payload = self._create_payment_payload()
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="wh2", request_id="wh2"),
+        json=payment_payload,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+
+      checkout = UnifiedCheckout.model_validate(response.json())
+      self.assertIsNotNone(
+        checkout.order, "completed checkout must carry an order"
+      )
+      checkout.platform = PlatformSchema(
+        webhook_url="https://platform.example/ucp-webhook"
+      )
+
+    captured = self._notify_and_capture(checkout, "order_placed")
+
+    self.assertEqual(len(captured), 1, "exactly one webhook must be delivered")
+    delivered = captured[0]
+    self.assertEqual(delivered["url"], "https://platform.example/ucp-webhook")
+    # The event type travels in the header, not the body.
+    self.assertEqual(delivered["headers"].get("X-Event-Type"), "order_placed")
+
+    self.assertIn("Webhook-Id", delivered["headers"])
+    uuid_str = delivered["headers"]["Webhook-Id"]
+    try:
+      uuid.UUID(uuid_str)
+    except ValueError:
+      self.fail(f"Webhook-Id {uuid_str} is not a valid UUID")
+
+    self.assertIn("Webhook-Timestamp", delivered["headers"])
+    timestamp_str = delivered["headers"]["Webhook-Timestamp"]
+    try:
+      timestamp = int(timestamp_str)
+    except ValueError:
+      self.fail(f"Webhook-Timestamp {timestamp_str} is not a valid integer")
+
+    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    self.assertLess(
+      abs(now - timestamp),
+      5,
+      f"Webhook-Timestamp ({timestamp}) should be close to now ({now})",
+    )
+
+    body = delivered["json"]
+    # The body IS an order: it validates and carries every required field.
+    Order.model_validate(body)
+    for field in (
+      "ucp",
+      "id",
+      "checkout_id",
+      "permalink_url",
+      "line_items",
+      "fulfillment",
+      "currency",
+      "totals",
+    ):
+      self.assertIn(field, body, f"order body missing required '{field}'")
+    # And it is NOT the old {event_type, checkout_id, order} envelope.
+    self.assertNotIn("event_type", body)
+    self.assertNotIn("order", body)
+
+  def test_webhook_is_skipped_when_there_is_no_order(self) -> None:
+    """No webhook is delivered when the checkout has no order to send.
+
+    The body must always be a valid order, so an absent order must never be
+    posted (the old envelope posted a body of {"order": null}).
+    """
+    with self.client:
+      payload = self._create_checkout_payload(
+        "wh_no_order", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="wh3", request_id="wh3"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      # A created-but-not-completed checkout has no order yet.
+      checkout = UnifiedCheckout.model_validate(response.json())
+      self.assertIsNone(checkout.order)
+      checkout.platform = PlatformSchema(
+        webhook_url="https://platform.example/ucp-webhook"
+      )
+
+    captured = self._notify_and_capture(checkout, "order_placed")
+    self.assertEqual(captured, [], "no webhook may be sent without an order")
+
+  def _completed_checkout(
+    self, checkout_id: str, webhook_url: str
+  ) -> UnifiedCheckout:
+    """Drive create + complete so a real order exists; set the webhook URL."""
+    with self.client:
+      payload = self._create_checkout_payload(
+        checkout_id, [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key=f"{checkout_id}_create",
+          request_id=f"{checkout_id}_create",
+        ),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      # The server assigns the checkout id (#167); the client-supplied id in
+      # the payload is not honored, so complete against the id the create
+      # response actually returned.
+      server_id = response.json()["id"]
+      response = self.client.post(
+        f"/checkout-sessions/{server_id}/complete",
+        headers=self._get_headers(
+          idempotency_key=f"{checkout_id}_complete",
+          request_id=f"{checkout_id}_complete",
+        ),
+        json=self._create_payment_payload(),
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+    checkout = UnifiedCheckout.model_validate(response.json())
+    self.assertIsNotNone(checkout.order)
+    checkout.platform = PlatformSchema(webhook_url=webhook_url)
+    return checkout
+
+  def test_webhook_delivery_carries_the_signature_headers(self) -> None:
+    """Every delivery carries the four required signature headers.
+
+    order.md, Webhook Signature Verification: webhook payloads MUST be
+    signed; UCP-Agent (the business profile URL), Signature,
+    Signature-Input, and Content-Digest are required headers on every
+    delivery.
+    """
+    checkout = self._completed_checkout(
+      "wh_signed", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(checkout, "order_placed")
+    self.assertEqual(len(captured), 1)
+    headers = captured[0]["headers"]
+    for name in ("UCP-Agent", "Signature", "Signature-Input", "Content-Digest"):
+      self.assertIn(name, headers, f"delivery is missing {name}")
+    # The UCP-Agent profile member is the business's own well-known URL
+    # (signatures.md, UCP-Agent parsing rule 4 for business profiles).
+    self.assertEqual(
+      headers["UCP-Agent"],
+      'profile="http://testserver/.well-known/ucp"',
+    )
+
+  def test_webhook_signature_verifies_against_the_published_key(self) -> None:
+    """The platform-side verification loop closes on the raw wire bytes.
+
+    order.md, Verification (Platform): Content-Digest matches the SHA-256 of
+    the raw body, and the signature verifies against the key the business
+    publishes in its profile's signing_keys with the declared kid. This test
+    IS that platform: it discovers the profile from the server and runs the
+    server's own verify path over the captured delivery.
+    """
+    checkout = self._completed_checkout(
+      "wh_verify", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(checkout, "order_placed")
+    self.assertEqual(len(captured), 1)
+    delivered = captured[0]
+    raw = delivered["content"]
+    headers = {k.lower(): v for k, v in delivered["headers"].items()}
+
+    self.assertTrue(
+      ucp_signing.content_digest_matches(headers["content-digest"], raw),
+      "Content-Digest must cover the exact raw body bytes on the wire",
+    )
+
+    with self.client:
+      profile = self.client.get("/.well-known/ucp").json()
+    keys = profile.get("signing_keys")
+    self.assertTrue(keys, "profile must publish signing_keys for verifiers")
+
+    split = urlsplit(delivered["url"])
+    keyid = ucp_signing.verify_request(
+      "POST", split.netloc, split.path, split.query, headers, raw, keys
+    )
+    self.assertEqual(keyid, webhook_signer.public_jwk()["kid"])
+
+    # Kill direction: a tampered body must NOT verify.
+    with self.assertRaises(ucp_signing.SignatureError):
+      ucp_signing.verify_request(
+        "POST",
+        split.netloc,
+        split.path,
+        split.query,
+        headers,
+        raw + b" ",
+        keys,
+      )
+
+  def test_webhook_signed_components_cover_identity_and_event(self) -> None:
+    """The signed set covers the spec table plus the webhook headers.
+
+    signatures.md, REST Request Signing: @method/@authority/@path always;
+    @query when the platform URL has one; content-digest/content-type for
+    the body; idempotency-key on a state-changing POST; ucp-agent when the
+    header is present. Webhook-Id, Webhook-Timestamp, and X-Event-Type are
+    additionally bound: every header this server adds to the delivery is
+    signed, so the event identity the platform dedupes and dispatches on
+    cannot be altered in transit.
+    """
+    checkout = self._completed_checkout(
+      "wh_components", "https://platform.example/ucp-webhook?token=t1"
+    )
+    captured = self._notify_and_capture(checkout, "order_placed")
+    self.assertEqual(len(captured), 1)
+    delivered = captured[0]
+    # The delivery reaches the URL exactly as the platform provided it.
+    self.assertEqual(
+      delivered["url"], "https://platform.example/ucp-webhook?token=t1"
+    )
+    parsed = ucp_signing.parse_signature_input(
+      delivered["headers"]["Signature-Input"]
+    )
+    self.assertIsNotNone(parsed)
+    components = set(next(iter(parsed.values()))["components"])
+    self.assertLessEqual(
+      {
+        "@method",
+        "@authority",
+        "@path",
+        "@query",
+        "content-digest",
+        "content-type",
+        "idempotency-key",
+        "ucp-agent",
+        "webhook-id",
+        "webhook-timestamp",
+        "x-event-type",
+      },
+      components,
+    )
+    # Every signed header component is actually present on the delivery.
+    for name in (
+      "Idempotency-Key",
+      "Webhook-Id",
+      "Webhook-Timestamp",
+      "X-Event-Type",
+    ):
+      self.assertIn(name, delivered["headers"])
+
+  def test_webhook_retries_after_5xx_and_succeeds(self) -> None:
+    """A 5xx from the receiver triggers a retry that then succeeds.
+
+    order.md, Guidelines (Business): MUST retry failed webhook deliveries.
+    The retry is the SAME event: Webhook-Id and Idempotency-Key are stable
+    across attempts so the platform can deduplicate, and every attempt is
+    signed.
+    """
+    config.FLAGS.webhook_retry_backoff_seconds = 0.01
+    checkout = self._completed_checkout(
+      "wh_retry", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(
+      checkout, "order_placed", respond=[500, 200]
+    )
+    self.assertEqual(
+      len(captured), 2, "a failed delivery must be retried once it 5xxes"
+    )
+    first, second = captured
+    self.assertEqual(
+      first["headers"]["Webhook-Id"], second["headers"]["Webhook-Id"]
+    )
+    self.assertEqual(
+      first["headers"]["Idempotency-Key"],
+      second["headers"]["Idempotency-Key"],
+    )
+    for attempt in captured:
+      self.assertIn("Signature", attempt["headers"])
+      self.assertEqual(attempt["json"]["id"], checkout.order.id)
+
+  def test_webhook_retries_after_connection_error(self) -> None:
+    """A transport failure (connection refused/reset) is also retried."""
+    config.FLAGS.webhook_retry_backoff_seconds = 0.01
+    checkout = self._completed_checkout(
+      "wh_conn_retry", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(
+      checkout,
+      "order_placed",
+      respond=[httpx.ConnectError("connection refused"), 200],
+    )
+    self.assertEqual(len(captured), 2)
+
+  def test_webhook_retries_are_bounded(self) -> None:
+    """A receiver that keeps failing sees a bounded number of attempts.
+
+    The retry MUST terminate: exactly --webhook_delivery_attempts POSTs,
+    and the failure never escapes into the checkout flow.
+    """
+    config.FLAGS.webhook_retry_backoff_seconds = 0.01
+    checkout = self._completed_checkout(
+      "wh_bounded", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(
+      checkout, "order_placed", respond=[500] * 10
+    )
+    self.assertEqual(len(captured), config.FLAGS.webhook_delivery_attempts)
+
+  def test_webhook_4xx_is_not_retried(self) -> None:
+    """A 4xx is a permanent rejection of this delivery: exactly one POST.
+
+    Retrying a request the receiver deemed invalid cannot succeed and turns
+    a bad delivery into a retry storm; only transport failures and 5xx are
+    transient.
+    """
+    config.FLAGS.webhook_retry_backoff_seconds = 0.01
+    checkout = self._completed_checkout(
+      "wh_4xx", "https://platform.example/ucp-webhook"
+    )
+    captured = self._notify_and_capture(
+      checkout, "order_placed", respond=[400, 200]
+    )
+    self.assertEqual(len(captured), 1)
+
+  def test_bad_webhook_signing_key_fails_at_startup(self) -> None:
+    """A misconfigured signing key aborts server startup loudly.
+
+    Loading the key only at delivery time would swallow the configuration
+    error into a per-webhook log line and silently degrade every delivery;
+    the operator asked for a specific signing identity, so a key that
+    cannot be loaded must fail the boot, not the webhooks.
+    """
+    config.FLAGS.webhook_signing_key = "/nonexistent/key.pem"
+    webhook_signer.reset()
+    try:
+      with self.assertRaises(OSError), TestClient(app):
+        pass
+    finally:
+      config.FLAGS.webhook_signing_key = None
+      webhook_signer.reset()
+
+  def test_profile_publishes_the_webhook_signing_key(self) -> None:
+    """The served profile publishes the webhook public key for verifiers.
+
+    signatures.md, Key Discovery: public keys live in the profile's
+    signing_keys[], a top-level sibling of `ucp` per the discovery profile
+    schema at this server's declared version (source/discovery/
+    profile_schema.json $defs/base at the 2026-04-08 pin --
+    config.get_server_version()). That schema defines no `keys` field
+    anywhere, nested or otherwise; this server must not publish one, so a
+    peer's strict 2026-04-08 verifier sees exactly the fields the schema
+    promises and nothing it does not.
+    """
+    with self.client:
+      profile = self.client.get("/.well-known/ucp").json()
+    jwk = webhook_signer.public_jwk()
+    self.assertIn(jwk, profile.get("signing_keys", []))
+    self.assertNotIn(
+      "keys",
+      profile.get("ucp", {}),
+      "ucp.keys[] has no basis in the 2026-04-08 schema and must not be "
+      "published",
+    )
+
+  def test_profile_publishes_rest_service_schema(self) -> None:
+    """The REST service points to the published OpenAPI document."""
+    with self.client:
+      profile = self.client.get("/.well-known/ucp").json()
+
+    service = profile["ucp"]["services"]["dev.ucp.shopping"][0]
+    version = profile["ucp"]["version"]
+    self.assertEqual(
+      service["schema"],
+      f"https://ucp.dev/{version}/services/shopping/rest.openapi.json",
+    )
+
+  def test_version_invalid_format(self) -> None:
+    """Tests that UCP-Agent with invalid version format is rejected."""
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_version_invalid", [("rose", "Red Rose", 1000, 1)]
+      )
+      headers = self._get_headers(idempotency_key="ver_1", request_id="ver_1")
+      headers["UCP-Agent"] = (
+        'profile="https://agent.example/profile"; version="bad-version"'
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=headers,
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 422)
+
+      # Verify the error structure matches UcpErrorResponse
+      data = response.json()
+      self.assertNotIn("detail", data)
+      expected = UcpErrorResponse(
+        ucp={"version": app.version, "status": "error"},
+        messages=[
+          UcpMessageError(
+            type=MessageType.ERROR,
+            code="VERSION_INVALID_FORMAT",
+            content=("Version 'bad-version' is invalid. Expected YYYY-MM-DD."),
+            severity=ErrorSeverity.UNRECOVERABLE,
+          )
+        ],
+      )
+      self.assertEqual(UcpErrorResponse.model_validate(data), expected)
+
+  def test_version_unsupported(self) -> None:
+    """Tests that UCP-Agent with unsupported (newer) version is rejected."""
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_version_unsupported", [("rose", "Red Rose", 1000, 1)]
+      )
+      headers = self._get_headers(idempotency_key="ver_2", request_id="ver_2")
+      unsupported_version = datetime.date.fromisoformat(
+        app.version
+      ) + datetime.timedelta(1)
+      headers["UCP-Agent"] = (
+        'profile="https://agent.example/profile"; '
+        f'version="{unsupported_version}"'
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=headers,
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 422)
+
+      # Verify the error structure matches UcpErrorResponse
+      data = response.json()
+      self.assertNotIn("detail", data)
+      expected = UcpErrorResponse(
+        ucp={"version": app.version, "status": "error"},
+        messages=[
+          UcpMessageError(
+            type=MessageType.ERROR,
+            code="VERSION_UNSUPPORTED",
+            content=(
+              f"Version {unsupported_version} is not supported. This merchant"
+              f" implements version {app.version}."
+            ),
+            severity=ErrorSeverity.UNRECOVERABLE,
+          )
+        ],
+      )
+      self.assertEqual(UcpErrorResponse.model_validate(data), expected)
+
+  def test_profile_includes_cache_control_header(self) -> None:
+    """Profiles must be served cacheable (overview.md, profile caching).
+
+    The Cache-Control header must be `public` with `max-age` of at least 60
+    seconds, and must not use `private`, `no-store`, or `no-cache`.
+    """
+    with self.client:
+      response = self.client.get("/.well-known/ucp")
+      self.assertEqual(response.status_code, 200)
+      cache_control = response.headers.get("Cache-Control", "")
+      directives = [d.strip().lower() for d in cache_control.split(",")]
+      self.assertIn("public", directives)
+      max_age = next(
+        (
+          int(d.split("=", 1)[1])
+          for d in directives
+          if d.startswith("max-age=") and d.split("=", 1)[1].isdigit()
+        ),
+        None,
+      )
+      self.assertIsNotNone(
+        max_age, "profile Cache-Control must include a numeric max-age"
+      )
+      self.assertGreaterEqual(max_age, 60)
+      for forbidden in ("private", "no-store", "no-cache"):
+        self.assertNotIn(forbidden, directives)
+
+  def test_create_omitting_server_determined_fields(self) -> None:
+    """A conformant create sends only line_items.
+
+    checkout.json marks currency (and id, status, totals, links) with
+    `ucp_request: omit`, describing currency as derived from address, context
+    and geo IP because merchants determine it. The generated
+    CheckoutCreateRequest carries no currency field for that reason, so a
+    platform following the schema sends neither.
+
+    The other tests build their payload with _create_checkout_payload, which
+    sets id and currency; extra="allow" keeps them, so checkout_req.currency
+    always resolves and this path is never exercised.
+    """
+    with self.client:
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="omit1", request_id="omit1"),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 1}]},
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+      self.assertIsInstance(
+        body.get("currency"),
+        str,
+        "server must determine a currency when the platform omits it",
+      )
+
+  def test_update_omitting_server_determined_fields(self) -> None:
+    """The update path reads the same omitted field and must not fail."""
+    with self.client:
+      created = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="omit2", request_id="omit2"),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 1}]},
+      )
+      self.assertEqual(created.status_code, 201, f"Response: {created.text}")
+      checkout_id = self.get_resource_id(created.json()["id"])
+      updated = self.client.put(
+        f"/checkout-sessions/{checkout_id}",
+        headers=self._get_headers(idempotency_key="omit3", request_id="omit3"),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 2}]},
+      )
+      self.assertEqual(updated.status_code, 200, f"Response: {updated.text}")
+
+  def test_create_assigns_id_server_side(self) -> None:
+    """A create carrying a non-string top-level `id` must not 500.
+
+    checkout.json marks `id` with `ucp_request: omit` -- the business assigns
+    it -- so the generated CheckoutCreateRequest declares no id field, and a
+    request carrying one of any JSON type is still schema-valid because
+    extra="allow" admits it as an extra member. create_checkout read that
+    extra attribute and passed it into the Checkout response model verbatim,
+    so `"id": 123` raised an uncaught pydantic ValidationError (HTTP 500).
+    Same defect class as the currency read fixed in #156: the server
+    determines the value and never takes it from the request.
+    """
+
+    def _body(**extra: object) -> dict:
+      body = {
+        "currency": "USD",
+        "line_items": [
+          {
+            "id": "li_1",
+            "quantity": 1,
+            "item": {"id": "rose", "price": 1000},
+            "totals": [],
+          }
+        ],
+        "payment": {"instruments": [], "handlers": []},
+        "status": "incomplete",
+        "ucp": {"version": "2026-04-08"},
+        "totals": [],
+        "links": [],
+      }
+      body.update(extra)
+      return body
+
+    with self.client:
+      # A non-string id is schema-valid (id is omit, so it arrives as an
+      # extra member) and must never 500.
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="sid1", request_id="sid1"),
+        json=_body(id=123),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      self.assertIsInstance(
+        response.json().get("id"),
+        str,
+        "server must assign a string id when the platform sends a non-string",
+      )
+
+      # A string id is ignored the same way: the server assigns its own.
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="sid2", request_id="sid2"),
+        json=_body(id="client_chosen_id"),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+      self.assertIsInstance(body.get("id"), str)
+      self.assertNotIn(
+        "client_chosen_id",
+        body["id"],
+        "id is ucp_request: omit, so the server assigns it",
+      )
+
+      # Omitted id keeps working (the conformant request).
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="sid3", request_id="sid3"),
+        json=_body(),
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      self.assertIsInstance(response.json().get("id"), str)
+
+  def test_create_does_not_adopt_client_supplied_omit_members(self) -> None:
+    """A create carrying ucp_request: omit members must not adopt them.
+
+    checkout.json marks continue_url, expires_at, messages and order as
+    ucp_request: omit, so the business owns them on the response. The create
+    handler must drop them from the request payload so they never echo in
+    the 201 response or persist into the stored session.
+    """
+    client_values = {
+      "continue_url": "https://platform.example/client-chosen",
+      "expires_at": "2030-01-01T00:00:00Z",
+      "messages": [
+        {
+          "type": "info",
+          "code": "custom",
+          "content": "client supplied text",
+          "severity": "recoverable",
+        }
+      ],
+      "order": {
+        "id": "order_client_chosen",
+        "checkout_session_id": "fake",
+        "permalink_url": "https://platform.example/order",
+      },
+    }
+
+    with self.client:
+      payload = self._create_checkout_payload(
+        "test_omit_members", [("rose", "Red Rose", 1000, 1)]
+      ).model_dump(mode="json", exclude_none=True)
+      payload.update(client_values)
+
+      headers = self._get_headers(idempotency_key="omit_1", request_id="omit_1")
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=headers,
+        json=payload,
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+
+      self.assertNotEqual(
+        body.get("continue_url"),
+        client_values["continue_url"],
+        "continue_url is business owned",
+      )
+      self.assertNotEqual(
+        body.get("expires_at"),
+        client_values["expires_at"],
+        "expires_at is business owned",
+      )
+      contents = [
+        m.get("content")
+        for m in body.get("messages", [])
+        if isinstance(m, dict)
+      ]
+      self.assertNotIn(
+        "client supplied text",
+        contents,
+        "messages are business owned",
+      )
+      order = body.get("order") or {}
+      self.assertNotEqual(
+        order.get("id"),
+        client_values["order"]["id"],
+        "order is business owned",
+      )
+
+      # Verify persistence: read session back with GET
+      checkout_id = self.get_resource_id(body["id"])
+      get_res = self.client.get(
+        f"/checkout-sessions/{checkout_id}",
+        headers=headers,
+      )
+      self.assertEqual(get_res.status_code, 200, f"Response: {get_res.text}")
+      stored = get_res.json()
+      self.assertNotEqual(
+        stored.get("continue_url"), client_values["continue_url"]
+      )
+      self.assertNotEqual(stored.get("expires_at"), client_values["expires_at"])
+      stored_contents = [
+        m.get("content")
+        for m in stored.get("messages", [])
+        if isinstance(m, dict)
+      ]
+      self.assertNotIn("client supplied text", stored_contents)
+      stored_order = stored.get("order") or {}
+      self.assertNotEqual(stored_order.get("id"), client_values["order"]["id"])
+
+  def test_create_ignores_client_currency_and_non_string_currency(
+    self,
+  ) -> None:
+    """Create with client/non-string currency must not override or 500.
+
+    checkout.json marks currency with ucp_request: omit -- the merchant
+    determines it via config.get_default_currency(). Client-supplied string
+    currency (e.g. 'XTS') must be ignored, and non-string currency (e.g. 123)
+    must not raise ValidationError.
+    """
+    with self.client:
+      # Client-supplied string currency is ignored (default 'USD' is used).
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="curr_1", request_id="curr_1"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "currency": "XTS",
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      self.assertEqual(response.json().get("currency"), "USD")
+
+      # Non-string currency does not cause 500 ValidationError.
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="curr_2", request_id="curr_2"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "currency": 123,
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      self.assertEqual(response.json().get("currency"), "USD")
+
+  def test_create_ignores_client_line_item_id_and_non_string_id(self) -> None:
+    """Create with line_items[].id assigns server ID; non-string never 500.
+
+    types/line_item.json marks id with create: omit -- the server assigns it.
+    Client-supplied string id is ignored, and non-string id does not raise
+    ValidationError.
+    """
+    with self.client:
+      # Client-supplied string line item id is ignored (server assigns UUID).
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="li_id_1", request_id="li_id_1"
+        ),
+        json={
+          "line_items": [
+            {"item": {"id": "rose"}, "quantity": 1, "id": "client_line_1"}
+          ],
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+      line_items = body.get("line_items", [])
+      self.assertEqual(len(line_items), 1)
+      self.assertIsInstance(line_items[0].get("id"), str)
+      self.assertNotEqual(line_items[0].get("id"), "client_line_1")
+
+      # Non-string line item id does not cause 500 ValidationError.
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="li_id_2", request_id="li_id_2"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1, "id": 123}],
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+      line_items = body.get("line_items", [])
+      self.assertEqual(len(line_items), 1)
+      self.assertIsInstance(line_items[0].get("id"), str)
+
+  def test_create_checkout_with_attribution(self) -> None:
+    """A checkout create carrying attribution returns 201 and persists."""
+    attribution_data = {
+      "campaign_id": "18234567890",
+      "campaign_source": "google",
+      "campaign_medium": "cpc",
+      "campaign_name": "spring_2026",
+      "gclid": "EAIaIQobChMI...",
+    }
+    with self.client:
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="attr_1", request_id="attr_1"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "attribution": attribution_data,
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+      self.assertIsNotNone(body.get("attribution"))
+      self.assertEqual(
+        body.get("attribution", {}).get("campaign_id"), "18234567890"
+      )
+
+      # Verify persistence
+      checkout_id = self.get_resource_id(body["id"])
+      get_res = self.client.get(
+        f"/checkout-sessions/{checkout_id}",
+        headers=self._get_headers(request_id="attr_1_get"),
+      )
+      self.assertEqual(get_res.status_code, 200, f"Response: {get_res.text}")
+      stored = get_res.json()
+      self.assertEqual(
+        stored.get("attribution", {}).get("campaign_id"), "18234567890"
+      )
+
+  def test_create_checkout_with_fulfillment_create_shape(self) -> None:
+    """Fulfillment on create accepts the shape that omits server assigned ids.
+
+    `fulfillment_method.json` marks `id` as `create: omit`, `line_item_ids` as
+    `create: optional`, and `shipping_destination.json` marks `id` as optional,
+    so a platform composing the advertised schemas sends none of them. The
+    other fulfillment tests populate all three, which is what let the request
+    model regress to the response container without any test noticing.
+    """
+    with self.client:
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="ful_create_min", request_id="ful_create_min"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "fulfillment": {
+            "methods": [
+              {
+                "type": "shipping",
+                "destinations": [
+                  {
+                    "street_address": "1 Test Way",
+                    "address_locality": "Springfield",
+                    "address_region": "CA",
+                    "address_country": "US",
+                    "postal_code": "99999",
+                  }
+                ],
+              }
+            ]
+          },
+        },
+      )
+      self.assertEqual(response.status_code, 201, f"Response: {response.text}")
+      body = response.json()
+
+      methods = body.get("fulfillment", {}).get("methods", [])
+      self.assertLen(methods, 1)
+      self.assertIsNotNone(methods[0].get("id"))
+      self.assertEqual(methods[0].get("type"), "shipping")
+
+      destinations = methods[0].get("destinations", [])
+      self.assertLen(destinations, 1)
+      self.assertIsNotNone(destinations[0].get("id"))
+      self.assertEqual(destinations[0].get("street_address"), "1 Test Way")
+      self.assertEqual(destinations[0].get("postal_code"), "99999")
+
+  def test_validation_failure_answers_with_ucp_envelope(self) -> None:
+    """A validation failure answers with the UCP envelope, not detail."""
+    with self.client:
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="val_err_1", request_id="val_err_1"
+        ),
+        json={"line_items": "not-an-array"},
+      )
+      self.assertEqual(response.status_code, 422)
+      self.assertIn(
+        "application/json", response.headers.get("content-type", "")
+      )
+      data = response.json()
+      self.assertNotIn("detail", data, "flat detail shape must be gone")
+      self.assertEqual(
+        data.get("ucp", {}).get("status"), "error", "ucp.status must be 'error'"
+      )
+      self.assertEqual(data.get("ucp", {}).get("version"), app.version)
+      messages = data.get("messages", [])
+      self.assertTrue(
+        isinstance(messages, list) and len(messages) > 0,
+        "messages[] must carry the failure",
+      )
+      msg = messages[0]
+      self.assertEqual(msg.get("type"), "error")
+      self.assertEqual(msg.get("code"), "INVALID_REQUEST")
+      self.assertEqual(msg.get("severity"), "unrecoverable")
+      self.assertIn(
+        "line_items",
+        msg.get("content", ""),
+        "content must name the offending member",
+      )
+
+  def test_update_applies_payment_instruments(self) -> None:
+    """An update carrying payment.instruments must apply them, not 500.
+
+    checkout.json marks `payment` as `ucp_request: {update: "optional"}`, and
+    checkout.md says submitting payment populates payment.instruments with
+    the collected instrument data -- update is a normal place for a platform
+    to submit payment. update_checkout built the response instead as
+    `PaymentResponse(instruments=checkout_req.payment.instruments)`, handing
+    the response model a list of
+    payment_instrument_update_request.SelectedPaymentInstrument instances.
+    The response model is typed for the sibling response class
+    payment_instrument.SelectedPaymentInstrument, so pydantic rejects the
+    construction as an unhandled ValidationError -- a bare 500, not the UCP
+    error envelope, whenever a request supplies a non-empty instruments
+    array. An update that omits payment (or sends instruments: []) never
+    exercises the mismatch, which is why this shipped unnoticed.
+    """
+    with self.client:
+      created = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="pay_upd_1", request_id="pay_upd_1"
+        ),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 1}]},
+      )
+      self.assertEqual(created.status_code, 201, f"Response: {created.text}")
+      checkout_id = self.get_resource_id(created.json()["id"])
+
+      instrument = {
+        "id": "instr_upd_1",
+        "handler_id": "mock_payment_handler",
+        "type": "card",
+        "display": {"brand": "Visa", "last_digits": "4242"},
+        "selected": True,
+      }
+      updated = self.client.put(
+        f"/checkout-sessions/{checkout_id}",
+        headers=self._get_headers(
+          idempotency_key="pay_upd_2", request_id="pay_upd_2"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "payment": {"instruments": [instrument]},
+        },
+      )
+      self.assertEqual(
+        updated.status_code,
+        200,
+        f"an update carrying payment.instruments must not 500: {updated.text}",
+      )
+      returned = (updated.json().get("payment") or {}).get("instruments") or []
+      self.assertEqual(
+        len(returned), 1, "the submitted instrument must be applied"
+      )
+      self.assertEqual(returned[0].get("id"), "instr_upd_1")
+      self.assertEqual(returned[0].get("handler_id"), "mock_payment_handler")
+      self.assertEqual(returned[0].get("type"), "card")
+      self.assertEqual(
+        returned[0].get("display"),
+        {"brand": "Visa", "last_digits": "4242"},
+      )
+      self.assertTrue(returned[0].get("selected"))
+
+  def test_create_applies_payment_instruments(self) -> None:
+    """A create carrying payment.instruments must apply them, not 500.
+
+    Same class as test_update_applies_payment_instruments: create_checkout
+    builds `PaymentResponse(instruments=checkout_req.payment.instruments)`
+    from the create request, handing the response model a list of
+    payment_instrument_create_request.SelectedPaymentInstrument instances
+    instead of the response class it declares. Every existing create test
+    that touches payment sends `instruments: []`, so the mismatch never
+    triggers pydantic's model-type check.
+    """
+    with self.client:
+      instrument = {
+        "id": "instr_create_1",
+        "handler_id": "mock_payment_handler",
+        "type": "card",
+        "display": {"brand": "Visa", "last_digits": "4242"},
+        "selected": True,
+      }
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="pay_create_1", request_id="pay_create_1"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "payment": {"instruments": [instrument]},
+        },
+      )
+      self.assertEqual(
+        response.status_code,
+        201,
+        f"a create carrying payment.instruments must not 500: {response.text}",
+      )
+      returned = (response.json().get("payment") or {}).get("instruments") or []
+      self.assertEqual(
+        len(returned), 1, "the submitted instrument must be applied"
+      )
+      self.assertEqual(returned[0].get("id"), "instr_create_1")
+      self.assertEqual(returned[0].get("handler_id"), "mock_payment_handler")
+      self.assertEqual(returned[0].get("type"), "card")
+
+  def test_checkout_readiness_lifecycle(self) -> None:
+    """Checkout without fulfillment is incomplete until selected."""
+    with self.client:
+      # 1. Create checkout without fulfillment -> status must be 'incomplete'
+      create_res = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(
+          idempotency_key="ready_1", request_id="ready_1"
+        ),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+        },
+      )
+      self.assertEqual(create_res.status_code, 201, create_res.text)
+      checkout_data = create_res.json()
+      self.assertEqual(
+        checkout_data["status"],
+        "incomplete",
+        "checkout without fulfillment selection must be incomplete",
+      )
+      checkout_id = self.get_resource_id(checkout_data["id"])
+
+      # 2. Attempt complete -> must fail with 400
+      payment_payload = self._create_payment_payload()
+      complete_res = self.client.post(
+        f"/checkout-sessions/{checkout_id}/complete",
+        headers=self._get_headers(
+          idempotency_key="ready_2", request_id="ready_2"
+        ),
+        json=payment_payload,
+      )
+      self.assertEqual(complete_res.status_code, 400)
+
+      # 3. Update checkout to select destination and option ->
+      #    status becomes 'ready_for_complete'
+      line_item_id = checkout_data["line_items"][0]["id"]
+      update_res = self.client.put(
+        f"/checkout-sessions/{checkout_id}",
+        headers=self._get_headers(
+          idempotency_key="ready_3", request_id="ready_3"
+        ),
+        json={
+          "line_items": [
+            {
+              "id": line_item_id,
+              "item": {"id": "rose"},
+              "quantity": 1,
+            }
+          ],
+          "fulfillment": {
+            "methods": [
+              {
+                "id": "method_1",
+                "type": "shipping",
+                "line_item_ids": [line_item_id],
+                "destinations": [{"id": "dest_1", "address_country": "US"}],
+                "selected_destination_id": "dest_1",
+                "groups": [
+                  {
+                    "id": "group_1",
+                    "line_item_ids": [line_item_id],
+                    "selected_option_id": "std-ship",
+                  }
+                ],
+              }
+            ]
+          },
+        },
+      )
+      self.assertEqual(update_res.status_code, 200, update_res.text)
+      self.assertEqual(
+        update_res.json()["status"],
+        "ready_for_complete",
+        "checkout with destination and option selected must be "
+        "ready_for_complete",
+      )
+
+      # 4. Now complete succeeds
+      complete_res = self.client.post(
+        f"/checkout-sessions/{checkout_id}/complete",
+        headers=self._get_headers(
+          idempotency_key="ready_4", request_id="ready_4"
+        ),
+        json=payment_payload,
+      )
+      self.assertEqual(complete_res.status_code, 200, complete_res.text)
+      self.assertEqual(complete_res.json()["status"], "completed")
+
+  def test_checkout_payment_handler_config_matches_discovery(self) -> None:
+    """The checkout envelope and discovery must advertise the same shop id.
+
+    discovery_profile.json is a template. routes/discovery.py reads it and
+    substitutes {{SHOP_ID}} before serving /.well-known/ucp, but
+    config._get_profile reads the same file separately and caches it raw, so
+    every checkout envelope carried the literal placeholder while discovery
+    carried a real value. A platform reading the handler config from the
+    checkout response therefore saw a different shop id than the one the
+    business advertises.
+    """
+    with self.client:
+      discovery = self.client.get("/.well-known/ucp")
+      self.assertEqual(discovery.status_code, 200, discovery.text)
+      advertised = discovery.json()["ucp"]["payment_handlers"]
+
+      payload = self._create_checkout_payload(
+        "shop_id_1", [("rose", "Red Rose", 1000, 1)]
+      )
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="sid1", request_id="sid1"),
+        json=payload.model_dump(mode="json", exclude_none=True),
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      in_checkout = response.json()["ucp"]["payment_handlers"]
+
+    serialized = json.dumps(in_checkout)
+    self.assertNotIn(
+      "{{",
+      serialized,
+      msg="the checkout envelope must not carry template placeholders",
+    )
+    self.assertEqual(
+      in_checkout,
+      advertised,
+      msg="checkout payment_handlers must match the advertised profile",
+    )
+
+    # Equality alone would accept any shared constant, so pin the shape of
+    # the substituted value rather than only its agreement.
+    shop_ids = [
+      handler["config"]["shop_id"]
+      for entries in in_checkout.values()
+      for handler in entries
+      if "shop_id" in handler.get("config", {})
+    ]
+    self.assertNotEmpty(shop_ids, msg="expected a handler carrying a shop_id")
+    for shop_id in shop_ids:
+      uuid.UUID(shop_id)
+
+  def _create_and_get_id(self, checkout_id: str, key: str) -> str:
+    """Create a checkout and return the server-assigned id."""
+    payload = self._create_checkout_payload(
+      checkout_id, [("rose", "Red Rose", 1000, 1)]
+    )
+    response = self.client.post(
+      "/checkout-sessions",
+      headers=self._get_headers(idempotency_key=key, request_id=key),
+      json=payload.model_dump(mode="json", exclude_none=True),
+    )
+    self.assertEqual(response.status_code, 201, response.text)
+    return self.get_resource_id(TestCheckout.model_validate(response.json()).id)
+
+  def test_complete_accepts_the_spec_shaped_body(self) -> None:
+    """Complete Checkout takes the body the spec defines.
+
+    checkout.json marks `payment` complete: required and `signals` optional.
+    There is no `risk_signals` member anywhere in the specification; it was
+    replaced by `signals` before the 2026-04-08 release. The handler declared
+    `risk_signals` as a required body member, so a spec-shaped request was
+    rejected with 422.
+    """
+    with self.client:
+      checkout_sid = self._create_and_get_id("spec_body_1", "sb1")
+      body = {
+        "payment": {
+          "instruments": [
+            {
+              "id": "instr_1",
+              "handler_id": "mock_payment_handler",
+              "type": "card",
+              "display": {"brand": "Visa", "last_digits": "1234"},
+              "credential": {"type": "token", "token": "success_token"},
+            }
+          ]
+        },
+        "signals": {"com.example.session": "xts-marker-2030"},
+      }
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="sb2", request_id="sb2"),
+        json=body,
+      )
+      self.assertEqual(response.status_code, 200, response.text)
+      self.assertEqual(
+        TestCheckout.model_validate(response.json()).status, "completed"
+      )
+
+  def test_complete_rejects_a_malformed_payment_with_4xx(self) -> None:
+    """A malformed payment is a client error, not a server fault.
+
+    The handler built PaymentCreateRequest inside its own body, so pydantic
+    raised a ValidationError that was not a RequestValidationError and the
+    request surfaced as a bare 500.
+    """
+    with self.client:
+      checkout_sid = self._create_and_get_id("bad_payment_1", "bp1")
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="bp2", request_id="bp2"),
+        json={
+          # risk_signals is sent so the request reaches the payment parsing
+          # rather than being turned away for the missing member. It is a
+          # tolerated extra once the body binds to the SDK model.
+          "risk_signals": {},
+          "payment": {
+            "instruments": [
+              {"id": "instr_1", "handler_id": 12345, "type": "card"}
+            ]
+          },
+        },
+      )
+      self.assertEqual(response.status_code, 422, response.text)
+      self.assertEqual(response.json()["ucp"]["status"], "error")
+
+  def test_complete_rejects_a_non_list_instruments_with_4xx(self) -> None:
+    """The same holds when instruments is not an array at all."""
+    with self.client:
+      checkout_sid = self._create_and_get_id("bad_payment_2", "bp3")
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="bp4", request_id="bp4"),
+        json={
+          "risk_signals": {},
+          "payment": {"instruments": "xts-not-a-list"},
+        },
+      )
+      self.assertEqual(response.status_code, 422, response.text)
+
+  def test_complete_carries_signals_into_the_request_identity(self) -> None:
+    """`signals` is part of the request, so it must reach the service.
+
+    The handler bound only `payment` and `risk_signals`, so a top-level
+    `signals` member was silently discarded. Reusing one idempotency key with
+    a different `signals` value is then indistinguishable from a replay. With
+    the body bound to the SDK model it is a conflict.
+    """
+    with self.client:
+      checkout_sid = self._create_and_get_id("signals_1", "sg1")
+      base = {
+        "payment": {
+          "instruments": [
+            {
+              "id": "instr_1",
+              "handler_id": "mock_payment_handler",
+              "type": "card",
+              "display": {"brand": "Visa", "last_digits": "1234"},
+              "credential": {"type": "token", "token": "success_token"},
+            }
+          ]
+        },
+      }
+      first = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="sg2", request_id="sg2"),
+        json=dict(base, signals={"com.example.session": "first-xts"}),
+      )
+      self.assertEqual(first.status_code, 200, first.text)
+
+      second = self.client.post(
+        f"/checkout-sessions/{checkout_sid}/complete",
+        headers=self._get_headers(idempotency_key="sg2", request_id="sg3"),
+        json=dict(base, signals={"com.example.session": "second-xts"}),
+      )
+      self.assertEqual(second.status_code, 409, second.text)
+
+  # --- Unhandled exceptions that surface as a bare 500 -------------------
+  # Each request below is answered today with the FastAPI default
+  # "Internal Server Error" text body, because the exception raised is
+  # neither a RequestValidationError nor a UcpError and no other handler
+  # is registered. Same class as #156, #167, #196 and #220.
+
+  def test_create_ignores_a_client_sent_platform_member(self) -> None:
+    """A create carrying `platform` must not collide with the server value.
+
+    `platform` is not a member of the checkout create request; the server
+    derives it from the UCP-Agent profile. The create path unpacks the
+    request dump with **checkout_data while also passing platform= as a
+    keyword, so a client-sent member raised TypeError and a bare 500.
+    """
+    with self.client:
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="plat1", request_id="plat1"),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "platform": {"webhook_url": "https://platform.example/xts-2030"},
+        },
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      self.assertNotIn(
+        "platform",
+        response.json(),
+        "the client cannot set platform; it comes from the agent profile",
+      )
+
+  def test_create_tolerates_a_profile_webhook_url_that_is_not_a_url(
+    self,
+  ) -> None:
+    """A malformed webhook_url in the agent profile is not a server fault.
+
+    extract_webhook_url returns the raw profile value and the route feeds
+    it to PlatformSchema, whose webhook_url is AnyUrl, outside any handler.
+    A profile publishing a non-URL value therefore raised ValidationError
+    and every create by that agent answered a bare 500. The function treats
+    every other profile problem as "no webhook", so a malformed value is
+    treated the same way here.
+    """
+    profile = {
+      "ucp": {
+        "version": "2026-04-08",
+        "capabilities": {
+          "dev.ucp.shopping.order": [
+            {
+              "name": "dev.ucp.shopping.order",
+              "config": {"webhook_url": "xts-not-a-url-2030"},
+            }
+          ]
+        },
+      }
+    }
+    with self.client, respx.mock:
+      respx.get("https://agent.example/profile").respond(200, json=profile)
+      response = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="hook1", request_id="hook1"),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 1}]},
+      )
+      self.assertEqual(response.status_code, 201, response.text)
+      self.assertNotIn("platform", response.json())
+
+  def test_complete_rejects_a_non_string_card_number_with_400(self) -> None:
+    """A card number of the wrong JSON type is a client error, not a fault.
+
+    _process_payment slices the last four digits of the card number for its
+    log line. PaymentCredential admits extra members of any type, so an
+    integer number raised TypeError there and the request answered a bare
+    500. The control, a string number, continues into the fulfillment
+    check and is answered with the INVALID_REQUEST envelope.
+    """
+    with self.client:
+      created = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="card1", request_id="card1"),
+        json={"line_items": [{"item": {"id": "rose"}, "quantity": 1}]},
+      )
+      self.assertEqual(created.status_code, 201, created.text)
+      checkout_id = self.get_resource_id(created.json()["id"])
+      response = self.client.post(
+        f"/checkout-sessions/{checkout_id}/complete",
+        headers=self._get_headers(idempotency_key="card2", request_id="card2"),
+        json={
+          "risk_signals": {},
+          "payment": {
+            "instruments": [
+              {
+                "id": "instr_1",
+                "handler_id": "mock_payment_handler",
+                "type": "card",
+                "credential": {"type": "card", "number": 4111111111111111},
+              }
+            ]
+          },
+        },
+      )
+      self.assertEqual(response.status_code, 400, response.text)
+      body = response.json()
+      self.assertEqual(body["ucp"]["status"], "error")
+      self.assertEqual(body["messages"][0]["code"], "INVALID_REQUEST")
+
+  def test_update_accepts_a_reused_destination_id_with_new_content(
+    self,
+  ) -> None:
+    """A platform may reuse its own destination id with a changed address.
+
+    save_customer_address stores the client-supplied destination id as the
+    primary key of customer_addresses and only looks for an existing row by
+    content. A second update that reuses the id with a different street
+    inserted a second row under the same key, and the UNIQUE violation
+    surfaced as a bare 500. The same happens when another buyer reuses the
+    id. The checkout must reflect the new address instead.
+    """
+    with self.client:
+      created = self.client.post(
+        "/checkout-sessions",
+        headers=self._get_headers(idempotency_key="dest1", request_id="dest1"),
+        json={
+          "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+          "buyer": {"email": "xts-buyer@example.com", "first_name": "X"},
+        },
+      )
+      self.assertEqual(created.status_code, 201, created.text)
+      checkout_id = self.get_resource_id(created.json()["id"])
+      line_item_id = created.json()["line_items"][0]["id"]
+
+      def update(
+        street: str, key: str, dest_id: str = "dest_xts_home"
+      ) -> httpx.Response:
+        return self.client.put(
+          f"/checkout-sessions/{checkout_id}",
+          headers=self._get_headers(idempotency_key=key, request_id=key),
+          json={
+            "line_items": [
+              {"id": line_item_id, "item": {"id": "rose"}, "quantity": 1}
+            ],
+            "fulfillment": {
+              "methods": [
+                {
+                  "id": "method_xts",
+                  "type": "shipping",
+                  "line_item_ids": [line_item_id],
+                  "destinations": [
+                    {
+                      "id": dest_id,
+                      "street_address": street,
+                      "address_locality": "Springfield",
+                      "address_region": "CA",
+                      "postal_code": "94016",
+                      "address_country": "US",
+                    }
+                  ],
+                  "selected_destination_id": "dest_xts_home",
+                }
+              ]
+            },
+          },
+        )
+
+      first = update("1 First St", "dest2")
+      self.assertEqual(first.status_code, 200, first.text)
+      second = update("2 Second St", "dest3")
+      self.assertEqual(second.status_code, 200, second.text)
+      destination = second.json()["fulfillment"]["methods"][0]["destinations"][
+        0
+      ]
+      self.assertEqual(destination["street_address"], "2 Second St")
+      third = update("2 Second St", "dest4", dest_id="")
+      self.assertEqual(third.status_code, 200, third.text)
+      self.assertEqual(
+        third.json()["fulfillment"]["methods"][0]["destinations"][0]["id"],
+        "dest_xts_home",
+      )
+
+  def test_another_buyer_may_reuse_a_destination_id(
+    self,
+  ) -> None:
+    """A destination id supplied by the platform is echoed back unchanged.
+
+    The id is the primary key of customer_addresses, so a second buyer reusing
+    one collided and the violation surfaced as a bare 500. Returning a freshly
+    generated id instead would answer 200 while leaving
+    selected_destination_id pointing at no destination, so no shipping option
+    is quoted and the checkout cannot reach ready_for_complete. The row key is
+    internal; the response must carry the id the platform sent, which is what
+    this test asserts.
+    """
+    with self.client:
+
+      def checkout_for(email: str, key: str) -> tuple[str, str]:
+        created = self.client.post(
+          "/checkout-sessions",
+          headers=self._get_headers(idempotency_key=key, request_id=key),
+          json={
+            "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+            "buyer": {"email": email, "first_name": "X"},
+          },
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        return (
+          self.get_resource_id(created.json()["id"]),
+          created.json()["line_items"][0]["id"],
+        )
+
+      def ship_to(checkout_id: str, line_item_id: str, key: str, street: str):
+        return self.client.put(
+          f"/checkout-sessions/{checkout_id}",
+          headers=self._get_headers(idempotency_key=key, request_id=key),
+          json={
+            "line_items": [
+              {"id": line_item_id, "item": {"id": "rose"}, "quantity": 1}
+            ],
+            "fulfillment": {
+              "methods": [
+                {
+                  "id": "method_xts",
+                  "type": "shipping",
+                  "line_item_ids": [line_item_id],
+                  "destinations": [
+                    {
+                      "id": "dest_xts_shared",
+                      "street_address": street,
+                      "address_locality": "Springfield",
+                      "address_region": "CA",
+                      "postal_code": "94016",
+                      "address_country": "US",
+                    }
+                  ],
+                  "selected_destination_id": "dest_xts_shared",
+                }
+              ]
+            },
+          },
+        )
+
+      first_id, first_item = checkout_for("xts-buyer-a@example.com", "shareA")
+      first = ship_to(first_id, first_item, "shareA2", "1 A Street")
+      self.assertEqual(first.status_code, 200, first.text)
+
+      other_id, other_item = checkout_for("xts-buyer-b@example.com", "shareB")
+      other = ship_to(other_id, other_item, "shareB2", "2 B Street")
+      self.assertEqual(other.status_code, 200, other.text)
+      method = other.json()["fulfillment"]["methods"][0]
+      self.assertEqual(
+        method["destinations"][0]["id"],
+        "dest_xts_shared",
+        "the platform destination id must be echoed back unchanged",
+      )
+      self.assertEqual(
+        method["destinations"][0]["street_address"], "2 B Street"
+      )
+      self.assertEqual(method["selected_destination_id"], "dest_xts_shared")
+
+  def test_create_ignores_a_client_sent_ap2_member(self) -> None:
+    """A client sent `ap2` member is ignored rather than validated.
+
+    `ap2` is not declared on the create request, so a client value survives as
+    an extra and reaches the response model, where it IS a declared field and
+    is therefore validated. A wrong typed value raised a ValidationError that
+    no handler covers, so the request answered a bare 500. The schema
+    annotates the member create: omit and the server never sets it on create,
+    so it belongs in the exclude set beside `platform`.
+    """
+    with self.client:
+      for value in ("not-an-object", 5, {"merchant_authorization": 5}):
+        created = self.client.post(
+          "/checkout-sessions",
+          headers=self._get_headers(
+            idempotency_key=f"ap2-{value}", request_id=f"ap2-{value}"
+          ),
+          json={
+            "line_items": [{"item": {"id": "rose"}, "quantity": 1}],
+            "ap2": value,
+          },
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertIsNone(
+          created.json().get("ap2"),
+          "a client sent ap2 member must not be echoed on create",
+        )
+        fetched = self.client.get(
+          f"/checkout-sessions/{self.get_resource_id(created.json()['id'])}",
+          headers=self._get_headers(),
+        )
+        self.assertEqual(fetched.status_code, 200, fetched.text)
+        self.assertIsNone(
+          fetched.json().get("ap2"),
+          "a client sent ap2 member must not be stored either",
+        )
+
+
+if __name__ == "__main__":
+  absltest.main()
