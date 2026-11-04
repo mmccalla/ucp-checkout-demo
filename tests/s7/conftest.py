@@ -52,7 +52,7 @@ def pair(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
 
 @pytest.fixture
 def cat(pair: Pair) -> Cat:
-    rec = Recorder(pair.biz._transport)
+    rec = Recorder(httpx.MockTransport(pair.biz.send))
     client = CatalogClient(
         BUSINESS,
         PROFILE_URL,

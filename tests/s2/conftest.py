@@ -111,9 +111,11 @@ def make_pair(
 
     # S4: the Business calls the mock PSP through an in-process transport (no network).
     psp_app = psp_main.create_app()
-    psp_tc = TestClient(psp_app, base_url="http://psp.test")
+    psp_tc = TestClient(psp_app, base_url="http://psp.test", follow_redirects=False)
     app = create_app(
-        payment_authorizer=psp_client.make_authorizer("http://psp.test", psp_tc._transport),
+        payment_authorizer=psp_client.make_authorizer(
+            "http://psp.test", httpx.MockTransport(psp_tc.send)
+        ),
         mode="ci",
         key=jwk.ephemeral(),
         endpoint=BUSINESS,
@@ -140,13 +142,13 @@ def make_pair(
     monkeypatch.setenv("BUSINESS_OUTBOX", str(tmp / "outbox.jsonl"))
     sleeps: list[float] = []
     tl = Timeline(tmp / "platform.jsonl", tmp / "business.jsonl")
-    with TestClient(app, base_url=BUSINESS) as biz:
+    with TestClient(app, base_url=BUSINESS, follow_redirects=False) as biz:
         client = CheckoutClient(
             BUSINESS,
             PROFILE_URL,
             key=key,
             kid=jwk.public_jwk(key)["kid"],
-            transport=biz._transport,
+            transport=httpx.MockTransport(biz.send),
             sleep=sleeps.append,
         )
         yield Pair(

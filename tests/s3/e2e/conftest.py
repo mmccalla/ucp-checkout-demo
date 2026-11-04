@@ -253,17 +253,17 @@ def make_stack(
 
         pair.webhook_target["fn"] = forward
         hook = Hook()
+        # raise_server_exceptions=False: a Business server error is an HTTP 500, as on the
+        # live layout (uvicorn), and not an exception in the test process.
+        biz = TestClient(
+            pair.app, base_url=BUSINESS, raise_server_exceptions=False, follow_redirects=False
+        )
         client = CheckoutClient(
             BUSINESS,
             PROFILE_URL,
             key=pair.key,
             kid=jwk.public_jwk(pair.key)["kid"],
-            # raise_server_exceptions=False: a Business server error is an HTTP 500, as on the
-            # live layout (uvicorn), and not an exception in the test process.
-            transport=HookTransport(
-                TestClient(pair.app, base_url=BUSINESS, raise_server_exceptions=False)._transport,
-                hook,
-            ),
+            transport=HookTransport(httpx.MockTransport(biz.send), hook),
             sleep=pair.sleeps.append,
         )
         pmain.set_client(client, pair.timeline)
@@ -273,12 +273,7 @@ def make_stack(
                 PROFILE_URL,
                 key=pair.key,
                 kid=jwk.public_jwk(pair.key)["kid"],
-                transport=HookTransport(
-                    TestClient(
-                        pair.app, base_url=BUSINESS, raise_server_exceptions=False
-                    )._transport,
-                    hook,
-                ),
+                transport=HookTransport(httpx.MockTransport(biz.send), hook),
                 sleep=pair.sleeps.append,
                 max_tries=1,
             )

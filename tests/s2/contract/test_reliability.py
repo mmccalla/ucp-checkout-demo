@@ -32,7 +32,7 @@ class FlakyTransport(httpx.BaseTransport):
 
 def test_ac49_network_error_on_update_retries_same_key_and_body(pair: Pair) -> None:
     c = pair.client.create(create_body()).body
-    flaky = FlakyTransport(pair.biz._transport, fail=1)
+    flaky = FlakyTransport(httpx.MockTransport(pair.biz.send), fail=1)
     pair.client.http = httpx.Client(transport=flaky)
     upd = {
         "line_items": [
