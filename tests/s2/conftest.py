@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from business_app import order_events, psp_client
 from business_app.main import create_app
@@ -76,9 +76,9 @@ class Pair:
     tmp: pathlib.Path
     profile_for: dict[str, Any] = field(default_factory=dict)
     psp: Any = None  # psp_mock Store: the charge records (S4)
-    webhooks: list[httpx.Request] = field(default_factory=list)  # S4: webhook deliveries
+    webhooks: list[httpx2.Request] = field(default_factory=list)  # S4: webhook deliveries
     # S4 (G6): a function that answers each webhook delivery. None answers 200.
-    webhook_target: dict[str, Callable[[httpx.Request], httpx.Response]] = field(
+    webhook_target: dict[str, Callable[[httpx2.Request], httpx2.Response]] = field(
         default_factory=dict
     )
 
@@ -111,9 +111,11 @@ def make_pair(
 
     # S4: the Business calls the mock PSP through an in-process transport (no network).
     psp_app = psp_main.create_app()
-    psp_tc = TestClient(psp_app, base_url="http://psp.test")
+    psp_tc = TestClient(psp_app, base_url="http://psp.test", follow_redirects=False)
     app = create_app(
-        payment_authorizer=psp_client.make_authorizer("http://psp.test", psp_tc._transport),
+        payment_authorizer=psp_client.make_authorizer(
+            "http://psp.test", httpx2.MockTransport(psp_tc.send)
+        ),
         mode="ci",
         key=jwk.ephemeral(),
         endpoint=BUSINESS,
@@ -122,31 +124,31 @@ def make_pair(
         faults=faults or {},
     )
     # S4: webhook deliveries go to an in-process recorder. No test delivery leaves the process.
-    hooks: list[httpx.Request] = []
-    target: dict[str, Callable[[httpx.Request], httpx.Response]] = {}
+    hooks: list[httpx2.Request] = []
+    target: dict[str, Callable[[httpx2.Request], httpx2.Response]] = {}
 
-    def _webhook(request: httpx.Request) -> httpx.Response:
+    def _webhook(request: httpx2.Request) -> httpx2.Response:
         request.read()
         hooks.append(request)
         fn = target.get("fn")
-        return fn(request) if fn is not None else httpx.Response(200)
+        return fn(request) if fn is not None else httpx2.Response(200)
 
     monkeypatch.setattr(
         importlib.import_module("config"),
         "WEBHOOK_TRANSPORT",
-        order_events.ObservedTransport(httpx.MockTransport(_webhook)),
+        order_events.ObservedTransport(httpx2.MockTransport(_webhook)),
     )
     monkeypatch.setenv("BUSINESS_DEAD_LETTER", str(tmp / "dead-letter.jsonl"))
     monkeypatch.setenv("BUSINESS_OUTBOX", str(tmp / "outbox.jsonl"))
     sleeps: list[float] = []
     tl = Timeline(tmp / "platform.jsonl", tmp / "business.jsonl")
-    with TestClient(app, base_url=BUSINESS) as biz:
+    with TestClient(app, base_url=BUSINESS, follow_redirects=False) as biz:
         client = CheckoutClient(
             BUSINESS,
             PROFILE_URL,
             key=key,
             kid=jwk.public_jwk(key)["kid"],
-            transport=biz._transport,
+            transport=httpx2.MockTransport(biz.send),
             sleep=sleeps.append,
         )
         yield Pair(

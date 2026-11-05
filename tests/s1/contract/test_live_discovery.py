@@ -10,7 +10,7 @@ import os
 import ssl
 from typing import Any
 
-import httpx
+import httpx2
 from ucp_core.constants import ROOT
 
 CA = ROOT / ".run/xdg-data/caddy/pki/authorities/local/root.crt"
@@ -23,8 +23,8 @@ def ctx() -> ssl.SSLContext:
     return c
 
 
-def get(url: str) -> httpx.Response:
-    with httpx.Client(verify=ctx(), follow_redirects=False, timeout=10) as c:
+def get(url: str) -> httpx2.Response:
+    with httpx2.Client(verify=ctx(), follow_redirects=False, timeout=10) as c:
         return c.get(url)
 
 

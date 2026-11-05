@@ -13,7 +13,7 @@ import pathlib
 import time
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from tests.s2.conftest import create_body
@@ -23,12 +23,12 @@ PLATFORM = "https://localhost:8443"
 
 
 @pytest.fixture(scope="module")
-def platform() -> httpx.Client:
-    c = httpx.Client(base_url=PLATFORM, verify=False, timeout=30)  # noqa: S501  (test CA, loopback)
+def platform() -> httpx2.Client:
+    c = httpx2.Client(base_url=PLATFORM, verify=False, timeout=30)  # noqa: S501  (test CA, loopback)
     try:
         assert c.get("/livez").status_code == 200, "the layout does not run"
-        assert httpx.get(JAEGER + "/api/v3/services", timeout=3).status_code == 200, "no Jaeger"
-    except httpx.HTTPError as e:
+        assert httpx2.get(JAEGER + "/api/v3/services", timeout=3).status_code == 200, "no Jaeger"
+    except httpx2.HTTPError as e:
         pytest.fail(f"the layout or Jaeger does not run: {e}")
     return c
 
@@ -44,7 +44,7 @@ def _wait(pred: Any, timeout: float = 20.0) -> list[dict[str, Any]]:
     return rows
 
 
-def test_ac56_live_create_has_one_trace_across_platform_business(platform: httpx.Client) -> None:
+def test_ac56_live_create_has_one_trace_across_platform_business(platform: httpx2.Client) -> None:
     r = platform.post("/api/checkout", json=create_body())
     assert r.status_code == 200, r.text
     rows = platform.get("/api/timeline").json()["rows"]

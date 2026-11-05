@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from platform_app import main as pmain
@@ -35,7 +35,7 @@ class G6:
         key: tuple[Any, str] = importlib.import_module("config").WEBHOOK_SIGNING_KEY
         return key
 
-    def post_webhook(self, headers: dict[str, str], body: bytes) -> httpx.Response:
+    def post_webhook(self, headers: dict[str, str], body: bytes) -> httpx2.Response:
         h = {k: v for k, v in headers.items() if k.lower() not in DROP}
         return self.platform.post("/webhooks/ucp/orders", content=body, headers=h)
 
@@ -54,9 +54,9 @@ def build(
     ptc = TestClient(pmain.app, base_url=PLATFORM)
     g = G6(pair, ptc, extra)
 
-    def forward(request: httpx.Request) -> httpx.Response:
+    def forward(request: httpx2.Request) -> httpx2.Response:
         r = g.post_webhook(dict(request.headers), request.content)
-        return httpx.Response(r.status_code, content=r.content)
+        return httpx2.Response(r.status_code, content=r.content)
 
     pair.webhook_target["fn"] = forward
     try:

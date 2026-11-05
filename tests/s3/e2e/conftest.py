@@ -23,7 +23,7 @@ from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-import httpx
+import httpx2
 import pytest
 import uvicorn
 from fastapi.testclient import TestClient
@@ -46,7 +46,7 @@ EVIDENCE = (
     else evidence_dir("S3", "g7")
 )
 Mutator = Callable[
-    [httpx.Request, dict[str, Any]], dict[str, Any] | tuple[int, dict[str, Any]] | None
+    [httpx2.Request, dict[str, Any]], dict[str, Any] | tuple[int, dict[str, Any]] | None
 ]
 
 
@@ -68,7 +68,7 @@ class Hook:
     strip_signature: bool = False
 
     @staticmethod
-    def op(req: httpx.Request) -> str:
+    def op(req: httpx2.Request) -> str:
         p = req.url.path
         if p.endswith("/catalog/search"):
             return "search"
@@ -88,11 +88,11 @@ class Hook:
         return [c["op"] for c in self.calls if c["reached"]]
 
 
-class HookTransport(httpx.BaseTransport):
-    def __init__(self, inner: httpx.BaseTransport, hook: Hook) -> None:
+class HookTransport(httpx2.BaseTransport):
+    def __init__(self, inner: httpx2.BaseTransport, hook: Hook) -> None:
         self.inner, self.hook = inner, hook
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         h = self.hook
         op = h.op(request)
         row = {
@@ -109,10 +109,10 @@ class HookTransport(httpx.BaseTransport):
         h.calls.append(row)
         if h.drop.get(op, 0) > 0:
             h.drop[op] -= 1
-            raise httpx.ConnectError("hook: dropped", request=request)
+            raise httpx2.ConnectError("hook: dropped", request=request)
         if op in h.status:
             code, body = h.status[op]
-            return httpx.Response(code, json=body, request=request)
+            return httpx2.Response(code, json=body, request=request)
         if h.strip_signature:
             for k in ("signature", "signature-input"):
                 if k in request.headers:
@@ -127,7 +127,7 @@ class HookTransport(httpx.BaseTransport):
         if h.drop_response.get(op, 0) > 0:
             h.drop_response[op] -= 1
             r.read()
-            raise httpx.ReadError("hook: response dropped", request=request)
+            raise httpx2.ReadError("hook: response dropped", request=request)
         if op in h.mutate:
             r.read()
             body = json.loads(r.content or b"null")
@@ -137,7 +137,7 @@ class HookTransport(httpx.BaseTransport):
                 status = r.status_code
                 if isinstance(new, tuple):  # S7: a mutator can also set the HTTP status
                     status, new = new
-                return httpx.Response(status, json=new, headers=hdrs, request=request)
+                return httpx2.Response(status, json=new, headers=hdrs, request=request)
         return r
 
 
@@ -246,24 +246,24 @@ def make_stack(
 
         # S4 (AC-74): the Business sends each order webhook to the Platform server on
         # 127.0.0.1. The Host header stays the signed authority (localhost:8443).
-        def forward(req: httpx.Request) -> httpx.Response:
+        def forward(req: httpx2.Request) -> httpx2.Response:
             h = {k: v for k, v in req.headers.items() if k.lower() != "content-length"}
-            r = httpx.post(server + req.url.path, content=req.content, headers=h, timeout=10)
-            return httpx.Response(r.status_code, content=r.content)
+            r = httpx2.post(server + req.url.path, content=req.content, headers=h, timeout=10)
+            return httpx2.Response(r.status_code, content=r.content)
 
         pair.webhook_target["fn"] = forward
         hook = Hook()
+        # raise_server_exceptions=False: a Business server error is an HTTP 500, as on the
+        # live layout (uvicorn), and not an exception in the test process.
+        biz = TestClient(
+            pair.app, base_url=BUSINESS, raise_server_exceptions=False, follow_redirects=False
+        )
         client = CheckoutClient(
             BUSINESS,
             PROFILE_URL,
             key=pair.key,
             kid=jwk.public_jwk(pair.key)["kid"],
-            # raise_server_exceptions=False: a Business server error is an HTTP 500, as on the
-            # live layout (uvicorn), and not an exception in the test process.
-            transport=HookTransport(
-                TestClient(pair.app, base_url=BUSINESS, raise_server_exceptions=False)._transport,
-                hook,
-            ),
+            transport=HookTransport(httpx2.MockTransport(biz.send), hook),
             sleep=pair.sleeps.append,
         )
         pmain.set_client(client, pair.timeline)
@@ -273,12 +273,7 @@ def make_stack(
                 PROFILE_URL,
                 key=pair.key,
                 kid=jwk.public_jwk(pair.key)["kid"],
-                transport=HookTransport(
-                    TestClient(
-                        pair.app, base_url=BUSINESS, raise_server_exceptions=False
-                    )._transport,
-                    hook,
-                ),
+                transport=HookTransport(httpx2.MockTransport(biz.send), hook),
                 sleep=pair.sleeps.append,
                 max_tries=1,
             )

@@ -11,7 +11,7 @@ import hashlib
 import pathlib
 import sys
 
-import httpx
+import httpx2
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BASES = {
@@ -40,7 +40,7 @@ def main() -> int:
     ap.add_argument("--check-only", action="store_true", help="compare only, do not write")
     a = ap.parse_args()
     bad = 0
-    with httpx.Client(timeout=20, follow_redirects=False) as client:
+    with httpx2.Client(timeout=20, follow_redirects=False) as client:
         for rel, want in manifest(ROOT):
             url = url_for(rel)
             r = client.get(url)

@@ -12,7 +12,7 @@ import os
 import ssl
 from typing import Any
 
-import httpx
+import httpx2
 from ucp_core.constants import ROOT
 
 from tests.s2.conftest import create_body, without_key_ids
@@ -36,7 +36,7 @@ def save(name: str, data: Any) -> None:
 
 
 def test_live_create_signed_and_timeline() -> None:
-    with httpx.Client(verify=ctx(), follow_redirects=False, timeout=20) as c:
+    with httpx2.Client(verify=ctx(), follow_redirects=False, timeout=20) as c:
         prof = c.get(PLATFORM + "/.well-known/ucp")
         assert prof.status_code == 200
         assert prof.json()["signing_keys"][0]["alg"] == "ES256"

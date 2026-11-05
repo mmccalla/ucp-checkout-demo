@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 import ucp_sigs
 from ucp_core import composed, telemetry
 
@@ -92,7 +92,7 @@ class CheckoutClient:
         profile_url: str,
         key: Any,
         kid: str,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx2.BaseTransport | None = None,
         verify: Any = True,
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -109,7 +109,7 @@ class CheckoutClient:
         self.max_tries = max_tries
         self.sign = sign
         self.on_result = on_result
-        self.http = httpx.Client(
+        self.http = httpx2.Client(
             transport=transport, verify=verify, timeout=10.0, follow_redirects=False
         )
         telemetry.instrument_client(self.http, "platform")  # client span and `traceparent`
@@ -256,7 +256,7 @@ class CheckoutClient:
                 headers.update(ucp_sigs.sign_request(self.key, self.kid, method, url, headers, raw))
             try:
                 r = self.http.request(method, url, content=raw or None, headers=headers)
-            except httpx.TransportError as e:
+            except httpx2.TransportError as e:
                 res.transport_error = type(e).__name__
                 res.status, res.body, res.headers = None, None, {}
                 if attempt < tries:

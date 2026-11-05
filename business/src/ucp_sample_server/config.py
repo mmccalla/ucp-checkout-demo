@@ -89,7 +89,7 @@ def _fail_closed(handler_id: str, credential: object, checkout: object) -> None:
 
 PAYMENT_AUTHORIZER: Any = _fail_closed
 
-# UCP demo patch P15 (tests only): an httpx.AsyncBaseTransport for webhook deliveries.
+# UCP demo patch P15 (tests only): an httpx2.AsyncBaseTransport for webhook deliveries.
 # None uses the network. Tests set it, so no test delivery leaves the process.
 WEBHOOK_TRANSPORT: Any = None
 

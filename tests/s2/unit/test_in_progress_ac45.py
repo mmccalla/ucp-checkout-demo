@@ -11,6 +11,7 @@ import pathlib
 from collections.abc import Iterator
 from datetime import timedelta
 
+import httpx2
 import pytest
 from platform_app.checkout_client import MAX_IN_PROGRESS_POLLS, RECOVERY_BACKOFF
 
@@ -31,13 +32,12 @@ def test_business_in_progress_then_completed_one_charge_no_update_no_second_comp
 ) -> None:
     c = ready(pair)
     seen: list[tuple[str, str, int | None]] = []
-    orig = pair.client.http.request
 
-    def spy(method: str, url: str, **kw: object) -> object:
-        seen.append((method, str(url).split("9443")[-1], None))
-        return orig(method, url, **kw)  # type: ignore[arg-type]
+    def spy(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.method, request.url.raw_path.decode(), None))
+        return pair.biz.send(request)
 
-    pair.client.http.request = spy  # type: ignore[assignment]
+    pair.client.http = httpx2.Client(transport=httpx2.MockTransport(spy))
     r = pair.client.complete(c["id"], complete_body(handler_id(c)), c.get("expires_at"))
     assert r.status == 200 and r.body["status"] == "completed", r.body
     assert r.body["order"]["id"]

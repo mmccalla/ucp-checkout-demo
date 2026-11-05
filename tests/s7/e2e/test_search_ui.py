@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-import httpx
+import httpx2
 from playwright.sync_api import Page, expect
 
 from tests.evidence import evidence_dir
@@ -69,12 +69,12 @@ def bodies(s: Stack, op: str) -> list[Any]:
 
 def biz_product(s: Stack, product_id: str) -> dict[str, Any]:
     h = {"UCP-Agent": f'profile="{PROFILE_URL}"', "Request-Id": "rid-test"}
-    r: httpx.Response = s.pair.biz.post("/catalog/product", json={"id": product_id}, headers=h)
+    r = s.pair.biz.post("/catalog/product", json={"id": product_id}, headers=h)
     body: dict[str, Any] = r.json()
     return body
 
 
-def more_pages() -> Callable[[httpx.Request, dict[str, Any]], Any]:
+def more_pages() -> Callable[[httpx2.Request, dict[str, Any]], Any]:
     """A mutator: page 1 has 3 products and a cursor. The request with that cursor gets page 2."""
 
     def product(base: dict[str, Any], n: int) -> dict[str, Any]:
@@ -85,7 +85,7 @@ def more_pages() -> Callable[[httpx.Request, dict[str, Any]], Any]:
 
     seen: dict[str, Any] = {}
 
-    def mutate(req: httpx.Request, body: dict[str, Any]) -> Any:
+    def mutate(req: httpx2.Request, body: dict[str, Any]) -> Any:
         sent = json.loads(req.content)
         if "products" in body:  # the Business does not know the cursor "c1"
             seen["body"] = body
@@ -225,7 +225,7 @@ def test_ac127_cards_show_only_the_allowed_fields(make_stack: Make) -> None:
 
 
 def test_ac12_3_one_price_or_a_range(make_stack: Make) -> None:
-    def ranged(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def ranged(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         first = body["products"][0]
         first["price_range"] = {
             "min": {"amount": 1500, "currency": "GBP"},
@@ -245,7 +245,7 @@ def test_ac12_3_one_price_or_a_range(make_stack: Make) -> None:
 def test_ux76_image_has_alt_text_or_is_decorative(make_stack: Make) -> None:
     """UX-7.6 SC 1.1.1: `alt_text` is the text alternative. With none, the image is decorative."""
 
-    def images(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def images(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         url = "https://images.example/p.png"
         body["products"][0]["media"] = [{"type": "image", "url": url, "alt_text": "A white mug"}]
         body["products"][1]["media"] = [{"type": "image", "url": url}]
@@ -372,7 +372,7 @@ def test_ac131_network_error_and_protocol_error(make_stack: Make) -> None:
     # ucp.status error with HTTP 200 gets the protocol text and "Start again".
     s.hook.status.pop("search")
 
-    def refused(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def refused(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         err = {
             "type": "error",
             "code": "invalid_request",
@@ -504,15 +504,15 @@ def test_ac134_add_sends_the_variant_id_or_is_disabled(make_stack: Make) -> None
 def test_ac134_unavailable_missing_availability_and_missing_variants(make_stack: Make) -> None:
     s = make_stack(catalog=True)
 
-    def unavailable(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def unavailable(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         body["product"]["variants"][0]["availability"] = {"available": False}
         return body
 
-    def no_availability(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def no_availability(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         del body["product"]["variants"][0]["availability"]
         return body
 
-    def no_variants(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def no_variants(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         body["product"]["variants"] = []
         return body
 
@@ -548,7 +548,7 @@ def test_ac134_availability_texts(make_stack: Make) -> None:
     s = make_stack(catalog=True)
     statuses = ["in_stock", "backorder", "preorder", "out_of_stock", "discontinued"]
 
-    def many(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def many(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         base = body["products"][0]
         out = []
         for i, st in enumerate(statuses):
@@ -605,7 +605,7 @@ def test_ac135_no_answer_and_not_found(make_stack: Make) -> None:
     p.wait_for_timeout(1800)
     s.hook.delay.clear()
 
-    def not_found(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def not_found(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         err = {"type": "error", "code": "not_found", "content": "gone", "severity": "recoverable"}
         return {"ucp": {**body["ucp"], "status": "error"}, "messages": [err]}
 
@@ -626,7 +626,7 @@ def test_ac135_no_answer_and_not_found(make_stack: Make) -> None:
 def test_ac12_15_back_to_items_without_search_opens_sc2(make_stack: Make) -> None:
     s = make_stack(catalog="lookup")
 
-    def not_found(req: httpx.Request, body: dict[str, Any]) -> dict[str, Any]:
+    def not_found(req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any]:
         err = {"type": "error", "code": "not_found", "content": "gone", "severity": "recoverable"}
         return {"ucp": {**body["ucp"], "status": "error"}, "messages": [err]}
 

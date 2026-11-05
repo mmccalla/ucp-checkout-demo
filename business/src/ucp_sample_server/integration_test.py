@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+# Modified by the UCP demo in 2026 (Apache-2.0 section 4(b)). The changes are the
+# comments marked "UCP demo patch". See business/UPSTREAM.md.
 
 """Integration tests for the UCP SDK Server."""
 
@@ -31,7 +33,7 @@ import config
 import db
 import dependencies
 from fastapi.testclient import TestClient
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 import respx
 import ucp_signing
 import webhook_signer
@@ -1447,7 +1449,7 @@ class IntegrationTest(absltest.TestCase):
     event_type: str,
     respond: list | None = None,
   ) -> list[dict]:
-    """Fire _notify_webhook with httpx stubbed and return captured POSTs.
+    """Fire _notify_webhook with httpx2 stubbed and return captured POSTs.
 
     ``respond`` optionally scripts the receiver, one entry per delivery
     attempt: an int becomes that HTTP status, an Exception instance is
@@ -1472,7 +1474,7 @@ class IntegrationTest(absltest.TestCase):
           else:
             route = respx.post().mock(
               side_effect=[
-                r if isinstance(r, Exception) else httpx.Response(r)
+                r if isinstance(r, Exception) else httpx2.Response(r)
                 for r in respond
               ]
             )
@@ -1797,7 +1799,7 @@ class IntegrationTest(absltest.TestCase):
     captured = self._notify_and_capture(
       checkout,
       "order_placed",
-      respond=[httpx.ConnectError("connection refused"), 200],
+      respond=[httpx2.ConnectError("connection refused"), 200],
     )
     self.assertEqual(len(captured), 2)
 
@@ -2895,7 +2897,7 @@ class IntegrationTest(absltest.TestCase):
 
       def update(
         street: str, key: str, dest_id: str = "dest_xts_home"
-      ) -> httpx.Response:
+      ) -> httpx2.Response:
         return self.client.put(
           f"/checkout-sessions/{checkout_id}",
           headers=self._get_headers(idempotency_key=key, request_id=key),

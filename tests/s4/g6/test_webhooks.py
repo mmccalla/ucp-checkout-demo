@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any
 
-import httpx
+import httpx2
 import ucp_sigs
 from platform_app import main as pmain
 from ucp_core import jwk
@@ -68,7 +68,7 @@ def hook_rows(g: G6) -> list[dict[str, Any]]:
 
 
 def resign(
-    g: G6, w: httpx.Request, *, key: Any = None, profile: str = BUSINESS_PROFILE, **hdr: str
+    g: G6, w: httpx2.Request, *, key: Any = None, profile: str = BUSINESS_PROFILE, **hdr: str
 ) -> tuple[dict[str, str], bytes]:
     """Sign a captured webhook body again (new headers), as the Business signer does."""
     k, kid = (key, jwk.public_jwk(key)["kid"]) if key is not None else g.business_key()
@@ -231,7 +231,7 @@ def test_ac72_503_then_retry_same_id_and_timestamp(g6: G6) -> None:
 
 
 def test_t42_permanent_rejection_goes_to_dead_letter(g6: G6) -> None:
-    g6.pair.webhook_target["fn"] = lambda req: httpx.Response(401)
+    g6.pair.webhook_target["fn"] = lambda req: httpx2.Response(401)
     res, _ = complete(g6)
     assert res.body["status"] == "completed"  # a webhook problem never breaks the checkout
     dead = [json.loads(x) for x in (g6.pair.tmp / "dead-letter.jsonl").read_text().splitlines()]
@@ -240,7 +240,7 @@ def test_t42_permanent_rejection_goes_to_dead_letter(g6: G6) -> None:
 
 
 def test_t42_three_attempts_then_dead_letter(g6: G6) -> None:
-    g6.pair.webhook_target["fn"] = lambda req: httpx.Response(503)
+    g6.pair.webhook_target["fn"] = lambda req: httpx2.Response(503)
     complete(g6)
     rows = [r for r in hook_rows(g6) if r["event_type"] == "order_placed"]
     assert [r["attempt"] for r in rows] == [1, 2, 3]

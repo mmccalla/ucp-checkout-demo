@@ -15,27 +15,27 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
+import httpx2
 from platform_app.checkout_client import RECOVERY_BACKOFF, CheckoutClient
 
 ID = "chk_1"
 NOW = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
 
 
-class Script(httpx.BaseTransport):
+class Script(httpx2.BaseTransport):
     """Each answer is a status and body, or None (a transport error)."""
 
     def __init__(self, complete: list[Any], get: list[Any]) -> None:
         self.queue = {"complete": list(complete), "get": list(get)}
         self.calls: list[tuple[str, str | None, bytes]] = []
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         op = "complete" if request.url.path.endswith("/complete") else "get"
         self.calls.append((op, request.headers.get("idempotency-key"), request.content))
         item = self.queue[op].pop(0)
         if item is None:
-            raise httpx.ReadTimeout("no response", request=request)
-        return httpx.Response(item[0], json=item[1], request=request)
+            raise httpx2.ReadTimeout("no response", request=request)
+        return httpx2.Response(item[0], json=item[1], request=request)
 
 
 def make(t: Script) -> tuple[CheckoutClient, list[float]]:

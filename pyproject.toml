@@ -4,9 +4,10 @@ version = "0.0.0"
 description = "UCP 2026-04-08 checkout demo with the com.google.pay handler (TEST only)"
 requires-python = "==3.12.*"
 dependencies = [
-  "fastapi==0.121.0",
+  "fastapi==0.133.0",
+  "starlette==1.3.1",
   "uvicorn==0.38.0",
-  "httpx==0.28.1",
+  "httpx2==2.16.0",
   "jsonschema[format-nongpl]==4.26.0",
   "referencing==0.37.0",
   "cryptography==50.0.2",
@@ -36,6 +37,7 @@ package = false
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers -ra"
+filterwarnings = ["error::starlette.exceptions.StarletteDeprecationWarning"]
 xfail_strict = true
 testpaths = ["tests"]
 pythonpath = ["platform/backend/src", "business/src", "libs", "psp-mock/src", "conformance", "tools/latency"]

@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from platform_app.catalog_client import LOOKUP, SEARCH, CatalogClient
 from ucp_core import jwk
@@ -20,14 +20,14 @@ from ucp_core import jwk
 from tests.s2.conftest import BUSINESS, PROFILE_URL, Pair, make_pair
 
 
-class Recorder(httpx.BaseTransport):
+class Recorder(httpx2.BaseTransport):
     """Pass each request to the test transport. Keep the request."""
 
-    def __init__(self, inner: httpx.BaseTransport) -> None:
+    def __init__(self, inner: httpx2.BaseTransport) -> None:
         self.inner = inner
-        self.requests: list[httpx.Request] = []
+        self.requests: list[httpx2.Request] = []
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         self.requests.append(request)
         return self.inner.handle_request(request)
 
@@ -39,7 +39,7 @@ class Cat:
     rec: Recorder
     extra: dict[str, Any] = field(default_factory=dict)
 
-    def raw(self, path: str, body: Any, **headers: str) -> httpx.Response:
+    def raw(self, path: str, body: Any, **headers: str) -> httpx2.Response:
         """A request with only the given headers (no signature, no Idempotency-Key)."""
         h = {"UCP-Agent": f'profile="{PROFILE_URL}"', "Request-Id": "rid-raw"} | headers
         return self.pair.biz.post(path, json=body, headers=h)
@@ -52,7 +52,7 @@ def pair(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
 
 @pytest.fixture
 def cat(pair: Pair) -> Cat:
-    rec = Recorder(pair.biz._transport)
+    rec = Recorder(httpx2.MockTransport(pair.biz.send))
     client = CatalogClient(
         BUSINESS,
         PROFILE_URL,

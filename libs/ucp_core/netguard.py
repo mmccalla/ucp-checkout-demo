@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 
 from .constants import MAX_PROFILE_BYTES
 
@@ -112,13 +112,13 @@ def fetch_profile(
     verify: ssl.SSLContext | bool = True,
     resolver: Resolver = system_resolver,
     timeout: float = 5.0,
-    transport: httpx.BaseTransport | None = None,
+    transport: httpx2.BaseTransport | None = None,
     ci_http_loopback: bool = False,
 ) -> Fetched:
     """GET a profile. No redirect, size bound, JSON body. The checks run before the connection."""
     addrs = resolve_checked(url, verifier_host, resolver, ci_http_loopback)
     raw = b""
-    with httpx.Client(
+    with httpx2.Client(
         verify=verify, follow_redirects=False, timeout=timeout, transport=transport
     ) as c:
         try:
@@ -135,7 +135,7 @@ def fetch_profile(
                     if len(raw) > MAX_PROFILE_BYTES:
                         raise FetchError("profile_malformed", f"{url}: body over limit")
                 headers = {k.lower(): v for k, v in r.headers.items()}
-        except httpx.HTTPError as e:
+        except httpx2.HTTPError as e:
             raise FetchError("profile_unreachable", f"{url}: {type(e).__name__} {e}") from e
     try:
         body = json.loads(raw)

@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-import httpx
+import httpx2
 from playwright.sync_api import expect
 
 from tests.evidence import evidence_dir
@@ -30,7 +30,7 @@ MSG = {
 def _run(s: Stack, form: str) -> dict[str, Any]:
     last: dict[str, Any] = {}
 
-    def keep(_req: httpx.Request, body: dict[str, Any]) -> dict[str, Any] | None:
+    def keep(_req: httpx2.Request, body: dict[str, Any]) -> dict[str, Any] | None:
         last.update(body)  # the last good checkout; the answer is not changed
         return None
 

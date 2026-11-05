@@ -6,7 +6,7 @@ import os
 import pathlib
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from business_app import store
 from platform_app import checkout_view
@@ -15,25 +15,25 @@ from ucp_core import netguard
 from tests.s2.conftest import Pair, create_body, make_pair
 
 
-class FlakyTransport(httpx.BaseTransport):
+class FlakyTransport(httpx2.BaseTransport):
     """Fail the first `fail` requests with a network error. Record each request."""
 
-    def __init__(self, inner: httpx.BaseTransport, fail: int) -> None:
+    def __init__(self, inner: httpx2.BaseTransport, fail: int) -> None:
         self.inner, self.fail = inner, fail
         self.seen: list[tuple[str, dict[str, str], bytes]] = []
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         self.seen.append((request.method, dict(request.headers), request.read()))
         if self.fail > 0:
             self.fail -= 1
-            raise httpx.ConnectError("test: network error", request=request)
+            raise httpx2.ConnectError("test: network error", request=request)
         return self.inner.handle_request(request)
 
 
 def test_ac49_network_error_on_update_retries_same_key_and_body(pair: Pair) -> None:
     c = pair.client.create(create_body()).body
-    flaky = FlakyTransport(pair.biz._transport, fail=1)
-    pair.client.http = httpx.Client(transport=flaky)
+    flaky = FlakyTransport(httpx2.MockTransport(pair.biz.send), fail=1)
+    pair.client.http = httpx2.Client(transport=flaky)
     upd = {
         "line_items": [
             {"id": c["line_items"][0]["id"], "item": {"id": "demo_tshirt"}, "quantity": 2}

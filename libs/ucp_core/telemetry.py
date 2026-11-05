@@ -4,7 +4,7 @@ Sources (read on 28 Oct 2026):
 - Python exporters: https://opentelemetry.io/docs/languages/python/exporters/ (OTLP over HTTP,
   `BatchSpanProcessor`, `Resource` with `service.name`).
 - Python instrumentation: https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/fastapi/fastapi.html
-  and .../httpx/httpx.html. These pages are for `latest`. The pinned versions are in `uv.lock`.
+  and .../httpx/httpx.html (it covers `HTTPX2ClientInstrumentor`). These pages are for `latest`. The pinned versions are in `uv.lock`.
 - Jaeger 2.22 accepts OTLP on `127.0.0.1:4318` (https://www.jaegertracing.io/docs/2.22/apis/).
 
 Rules:
@@ -22,10 +22,11 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx2
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPX2ClientInstrumentor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor, SpanExporter
@@ -99,12 +100,12 @@ def uninstrument_fastapi(app: Any) -> None:
     FastAPIInstrumentor.uninstrument_app(app)
 
 
-def instrument_client(client: Any, service: str) -> bool:
-    """Add the client span (and the `traceparent` header) to an httpx client."""
+def instrument_client(client: httpx2.Client | httpx2.AsyncClient, service: str) -> bool:
+    """Add the client span (and the `traceparent` header) to an httpx2 client."""
     p = _providers.get(service) or init(service)
     if p is None:
         return False
-    HTTPXClientInstrumentor.instrument_client(client, tracer_provider=p)
+    HTTPX2ClientInstrumentor.instrument_client(client, tracer_provider=p)
     return True
 
 

@@ -50,7 +50,7 @@ from exceptions import InvalidRequestError
 from exceptions import OutOfStockError
 from exceptions import PaymentFailedError
 from exceptions import ResourceNotFoundError
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 from models import UnifiedCheckout as Checkout
 from models import UnifiedCheckoutCreateRequest
 from models import UnifiedCheckoutUpdateRequest
@@ -1114,7 +1114,7 @@ class CheckoutService:
     try:
       key, kid = webhook_signer.signing_key()
       # UCP demo patch P15: config.WEBHOOK_TRANSPORT is a test seam.
-      async with httpx.AsyncClient(transport=config.WEBHOOK_TRANSPORT) as client:
+      async with httpx2.AsyncClient(transport=config.WEBHOOK_TRANSPORT) as client:
         for attempt in range(1, attempts + 1):
           # Re-sign per attempt so the signature's `created` timestamp
           # reflects the actual send time of each delivery attempt.
@@ -1138,7 +1138,7 @@ class CheckoutService:
               headers={**headers, **additions},
               timeout=5.0,
             )
-          except httpx.HTTPError as exc:
+          except httpx2.HTTPError as exc:
             failure = f"transport error: {exc}"
           else:
             if 200 <= response.status_code < 300:

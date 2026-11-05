@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+# Modified by the UCP demo in 2026 (Apache-2.0 section 4(b)). The changes are the
+# comments marked "UCP demo patch". See business/UPSTREAM.md.
 
 """RFC 9421 HTTP Message Signatures for UCP, using the default UCP profile.
 
@@ -41,7 +43,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-import httpx
+import httpx2  # UCP demo patch P17: httpx2 replaces httpx
 
 logger = logging.getLogger(__name__)
 
@@ -781,9 +783,9 @@ async def fetch_signing_keys(
 
   _assert_profile_url_allowed(profile_url, allow_insecure)
   try:
-    async with httpx.AsyncClient(follow_redirects=False) as client:
+    async with httpx2.AsyncClient(follow_redirects=False) as client:
       response = await client.get(profile_url, timeout=5.0)
-  except httpx.HTTPError as exc:
+  except httpx2.HTTPError as exc:
     raise SignatureError(
       "profile_unreachable", 424, f"Profile fetch failed: {exc}"
     ) from exc

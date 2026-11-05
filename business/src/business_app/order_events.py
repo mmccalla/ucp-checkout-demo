@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import httpx
+import httpx2
 from opentelemetry import propagate, trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
@@ -64,7 +64,7 @@ def dead_letter_file() -> pathlib.Path:
     )
 
 
-def suite_webhook_url_ok(url: httpx.URL, port: int) -> bool:
+def suite_webhook_url_ok(url: httpx2.URL, port: int) -> bool:
     """T-115 item 3: the exact suite webhook URL.
 
     Scheme `http`, host `localhost`, the configured port, the one path, no query, no fragment,
@@ -81,7 +81,7 @@ def suite_webhook_url_ok(url: httpx.URL, port: int) -> bool:
     )
 
 
-class ObservedTransport(httpx.AsyncBaseTransport):
+class ObservedTransport(httpx2.AsyncBaseTransport):
     """Log each webhook attempt (AC-72).
 
     Refuse a host that is not loopback (DM-26). Refuse a URL with scheme `http` (T-115), with
@@ -91,19 +91,19 @@ class ObservedTransport(httpx.AsyncBaseTransport):
 
     def __init__(
         self,
-        inner: httpx.AsyncBaseTransport | None = None,
+        inner: httpx2.AsyncBaseTransport | None = None,
         *,
         mode: str = "demo",
         suite_webhook_port: int | None = None,
         ci_guard: Callable[[], bool] = lambda: False,
     ):
-        self.inner = inner or httpx.AsyncHTTPTransport(verify=tlsctx.client_context())
+        self.inner = inner or httpx2.AsyncHTTPTransport(verify=tlsctx.client_context())
         self.attempts: dict[str, int] = {}
         self.mode = mode
         self.suite_webhook_port = suite_webhook_port
         self.ci_guard = ci_guard
 
-    def _http_allowed(self, url: httpx.URL) -> bool:
+    def _http_allowed(self, url: httpx2.URL) -> bool:
         return (
             self.mode == "ci"
             and self.suite_webhook_port is not None
@@ -111,7 +111,7 @@ class ObservedTransport(httpx.AsyncBaseTransport):
             and suite_webhook_url_ok(url, self.suite_webhook_port)
         )
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """One CLIENT span for each attempt (AC-66, AC-72). The span has no header and no body."""
         prov = telemetry.provider("business")
         if prov is None:
@@ -129,7 +129,7 @@ class ObservedTransport(httpx.AsyncBaseTransport):
             propagate.inject(request.headers)  # `traceparent`; the signature does not cover it
             try:
                 resp = await self._attempt(request, span)
-            except httpx.HTTPError as e:
+            except httpx2.HTTPError as e:
                 span.set_status(Status(StatusCode.ERROR, type(e).__name__))
                 raise
             span.set_attribute("http.response.status_code", resp.status_code)
@@ -138,8 +138,8 @@ class ObservedTransport(httpx.AsyncBaseTransport):
             return resp
 
     async def _attempt(
-        self, request: httpx.Request, span: trace.Span | None = None
-    ) -> httpx.Response:
+        self, request: httpx2.Request, span: trace.Span | None = None
+    ) -> httpx2.Response:
         wid = request.headers.get("webhook-id", "")
         n = self.attempts.get(wid, 0) + 1
         self.attempts[wid] = n
@@ -156,14 +156,14 @@ class ObservedTransport(httpx.AsyncBaseTransport):
         if request.url.host not in LOOPBACK_HOSTS:
             row["code"] = "blocked_non_loopback"
             events.write(row)
-            raise httpx.ConnectError("webhook host is not loopback (DM-26)", request=request)
+            raise httpx2.ConnectError("webhook host is not loopback (DM-26)", request=request)
         if request.url.scheme != "https" and not self._http_allowed(request.url):
             row["code"] = "blocked_non_https"
             events.write(row)
-            raise httpx.ConnectError("webhook URL is not https (T-115)", request=request)
+            raise httpx2.ConnectError("webhook URL is not https (T-115)", request=request)
         try:
             resp = await self.inner.handle_async_request(request)
-        except httpx.HTTPError as e:
+        except httpx2.HTTPError as e:
             row["code"] = type(e).__name__
             events.write(row)
             raise
