@@ -18,7 +18,7 @@ AC-56 needs one trace per call through the Platform, the Business and the mock P
    | opentelemetry-sdk | 1.45.1 | `TracerProvider`, `Resource`, span processors | https://opentelemetry.io/docs/languages/python/getting-started/ |
    | opentelemetry-exporter-otlp-proto-http | 1.45.1 | OTLP over HTTP to Jaeger port 4318 | https://opentelemetry.io/docs/languages/python/exporters/ |
    | opentelemetry-instrumentation-fastapi | 0.66b1 | server span for each request | https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/fastapi/fastapi.html |
-   | opentelemetry-instrumentation-httpx | 0.66b1 | client span and `traceparent` header | https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/httpx/httpx.html |
+   | opentelemetry-instrumentation-httpx | 0.66b1 | client span and `traceparent` header (class `HTTPX2ClientInstrumentor`, for the `httpx2` client) | https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/httpx/httpx.html |
 
    UNVERIFIED: the two instrumentation pages above are for `latest`. They do not name version 0.66b1. The tests in `tests/s4/contract/` show the behaviour of 0.66b1 (see "Observed").
 

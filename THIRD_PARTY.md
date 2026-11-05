@@ -5,16 +5,16 @@ None of them is copied into this repository. This repository does not pass on th
 The licence of each package comes from the metadata of the installed package (and from PyPI where the metadata gave only a family name).
 The licence texts are in each package. `NOTICE` lists the files that this repository does hold from other authors.
 
-The lock file has 77 packages (17 direct run time, 4 direct development only, 56 indirect).
+The lock file has 79 packages (17 direct run time, 4 direct development only, 58 indirect).
 
 | Package | Version | Role | Licence |
 |---|---|---|---|
 | absl-py | 2.5.1 | direct, run time | Apache-2.0 |
 | aiosqlite | 0.22.1 | direct, run time | MIT |
 | cryptography | 50.0.2 | direct, run time | Apache-2.0 OR BSD-3-Clause |
-| fastapi | 0.121.0 | direct, run time | MIT |
+| fastapi | 0.133.0 | direct, run time | MIT |
 | greenlet | 3.5.6 | direct, run time | MIT AND PSF-2.0 |
-| httpx | 0.28.1 | direct, run time | BSD-3-Clause |
+| httpx2 | 2.16.0 | direct, run time | BSD-3-Clause |
 | jsonschema | 4.26.0 | direct, run time | MIT |
 | opentelemetry-api | 1.45.1 | direct, run time | Apache-2.0 |
 | opentelemetry-exporter-otlp-proto-http | 1.45.1 | direct, run time | Apache-2.0 |
@@ -46,7 +46,8 @@ The lock file has 77 packages (17 direct run time, 4 direct development only, 56
 | fqdn | 1.6.0 | indirect | MPL-2.0 |
 | googleapis-common-protos | 1.76.0 | indirect | Apache-2.0 |
 | h11 | 0.16.0 | indirect | MIT |
-| httpcore | 1.0.9 | indirect | BSD-3-Clause |
+| httpcore2 | 2.16.0 | indirect | BSD-3-Clause |
+| httpx2-jsfetch | 1.0 | indirect (only on Emscripten, never installed here) | BSD-3-Clause |
 | idna | 3.20 | indirect | BSD-3-Clause |
 | iniconfig | 2.3.1 | indirect | MIT |
 | isoduration | 20.11.0 | indirect | ISC |
@@ -78,7 +79,8 @@ The lock file has 77 packages (17 direct run time, 4 direct development only, 56
 | rfc3987-syntax | 1.1.0 | indirect | MIT |
 | rpds-py | 2026.9.1 | indirect | MIT |
 | six | 1.17.0 | indirect | MIT |
-| starlette | 0.49.3 | indirect | BSD-3-Clause |
+| starlette | 1.3.1 | indirect | BSD-3-Clause |
+| truststore | 0.10.5 | indirect | MIT |
 | typing-extensions | 4.16.0 | indirect | PSF-2.0 |
 | typing-inspection | 0.4.4 | indirect | MIT |
 | tzdata | 2026.5 | indirect | Apache-2.0 |
