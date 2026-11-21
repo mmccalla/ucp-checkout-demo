@@ -16,11 +16,11 @@ The lock file has 79 packages (17 direct run time, 4 direct development only, 58
 | greenlet | 3.5.6 | direct, run time | MIT AND PSF-2.0 |
 | httpx2 | 2.16.0 | direct, run time | BSD-3-Clause |
 | jsonschema | 4.26.0 | direct, run time | MIT |
-| opentelemetry-api | 1.45.1 | direct, run time | Apache-2.0 |
-| opentelemetry-exporter-otlp-proto-http | 1.45.1 | direct, run time | Apache-2.0 |
-| opentelemetry-instrumentation-fastapi | 0.66b1 | direct, run time | Apache-2.0 |
-| opentelemetry-instrumentation-httpx | 0.66b1 | direct, run time | Apache-2.0 |
-| opentelemetry-sdk | 1.45.1 | direct, run time | Apache-2.0 |
+| opentelemetry-api | 1.45.2 | direct, run time | Apache-2.0 |
+| opentelemetry-exporter-otlp-proto-http | 1.45.2 | direct, run time | Apache-2.0 |
+| opentelemetry-instrumentation-fastapi | 0.66b2 | direct, run time | Apache-2.0 |
+| opentelemetry-instrumentation-httpx | 0.66b2 | direct, run time | Apache-2.0 |
+| opentelemetry-sdk | 1.45.2 | direct, run time | Apache-2.0 |
 | referencing | 0.37.0 | direct, run time | MIT |
 | shortuuid | 1.0.13 | direct, run time | BSD-3-Clause |
 | sqlalchemy | 2.0.55 | direct, run time | MIT |
@@ -55,14 +55,14 @@ The lock file has 79 packages (17 direct run time, 4 direct development only, 58
 | jsonschema-specifications | 2025.9.1 | indirect | MIT |
 | lark | 1.3.1 | indirect | MIT |
 | mypy-extensions | 1.1.0 | indirect | MIT |
-| opentelemetry-exporter-http-transport | 0.66b1 | indirect | Apache-2.0 |
-| opentelemetry-exporter-otlp-common | 0.66b1 | indirect | Apache-2.0 |
-| opentelemetry-exporter-otlp-proto-common | 1.45.1 | indirect | Apache-2.0 |
-| opentelemetry-instrumentation | 0.66b1 | indirect | Apache-2.0 |
-| opentelemetry-instrumentation-asgi | 0.66b1 | indirect | Apache-2.0 |
-| opentelemetry-proto | 1.45.1 | indirect | Apache-2.0 |
-| opentelemetry-semantic-conventions | 0.66b1 | indirect | Apache-2.0 |
-| opentelemetry-util-http | 0.66b1 | indirect | Apache-2.0 |
+| opentelemetry-exporter-http-transport | 0.66b2 | indirect | Apache-2.0 |
+| opentelemetry-exporter-otlp-common | 0.66b2 | indirect | Apache-2.0 |
+| opentelemetry-exporter-otlp-proto-common | 1.45.2 | indirect | Apache-2.0 |
+| opentelemetry-instrumentation | 0.66b2 | indirect | Apache-2.0 |
+| opentelemetry-instrumentation-asgi | 0.66b2 | indirect | Apache-2.0 |
+| opentelemetry-proto | 1.45.2 | indirect | Apache-2.0 |
+| opentelemetry-semantic-conventions | 0.66b2 | indirect | Apache-2.0 |
+| opentelemetry-util-http | 0.66b2 | indirect | Apache-2.0 |
 | packaging | 26.3 | indirect | Apache-2.0 OR BSD-2-Clause |
 | pathspec | 1.1.1 | indirect | MPL-2.0 |
 | pluggy | 1.7.0 | indirect | MIT |
